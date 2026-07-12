@@ -49,15 +49,13 @@ Enforced by scripts, not just prompts; every change must preserve them:
   (`EM_ROOT`, `EM_TMUX_SOCKET`, `EM_LAUNCH_OVERRIDE`) are documented in the
   scripts that honor them and are not Director-facing.
 
-## Porting from firstmate
+## Toolbelt design notes
 
-Most `bin/` scripts port one-to-one from
-[firstmate](https://github.com/kunchenguid/firstmate) (`fm-*` → `em-*`, MIT,
-attribution in [NOTICE](NOTICE)). Two locked replacements (PRD key scoping
-decisions): `em-worktree.sh` (plain `git worktree`, no treehouse pool) and
-`em-validate.sh` (M3; minimal test+lint gate, no no-mistakes). When porting,
-swap treehouse calls for `em-worktree.sh` and no-mistakes hooks for
-`em-validate.sh`.
+The `bin/` scripts share a consistent `em-*` naming scheme and a common set
+of test seams. Two pieces are worth calling out (PRD key scoping decisions):
+`em-worktree.sh` wraps plain `git worktree` (no worktree pool) and
+`em-validate.sh` (M3) is a minimal test+lint gate. Other scripts that manage
+worktrees or validation call into these rather than reimplementing them.
 
 ## Tests
 

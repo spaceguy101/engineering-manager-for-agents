@@ -93,6 +93,4 @@ repo becomes the EM, so repo development has its own workflow.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Ports code from
-[firstmate](https://github.com/kunchenguid/firstmate) (MIT); see
-[NOTICE](NOTICE).
+MIT — see [LICENSE](LICENSE).

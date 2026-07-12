@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # em-worktree.sh — plain `git worktree` wrapper with em naming and safety
-# conventions. Replaces firstmate's treehouse pool (PRD key scoping decision 2).
+# conventions. Uses git worktrees directly, no pool (PRD key scoping decision 2).
 #
 # Usage:
 #   em-worktree.sh add <id> <repo>        create worktrees/<id> for projects/<repo>,

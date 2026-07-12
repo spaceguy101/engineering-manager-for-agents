@@ -1,12 +1,11 @@
 # PRD: Engineering Manager for AI Agents
 
 **Status:** v0.4 — v1 shipped; this spec is kept reconciled with the implementation
-**Inspiration:** [firstmate](https://github.com/kunchenguid/firstmate) — we aim for functional parity with that project, reframed around an "Engineering Manager" metaphor.
 
 **Key scoping decisions (locked):**
-1. **Simple built-in validation pipeline instead of no-mistakes.** firstmate's external `no-mistakes` tool is replaced by our own minimal `gated` mode: **test + lint enforcement only** — a script that runs the project's configured test and lint commands and blocks the PR until both pass. No structured review findings, risk labels, or evidence databases.
-2. **Plain git worktrees, no pooling.** We use `git worktree add` / `git worktree remove` directly instead of firstmate's treehouse worktree pool. Our spawn/teardown scripts wrap these commands.
-3. **The rest of the toolbelt is a direct port.** All other `bin/` helper scripts are copied/adapted from firstmate one-to-one (renamed `fm-*` → `em-*`), preserving MIT attribution.
+1. **Simple built-in validation pipeline.** A minimal `gated` mode provides **test + lint enforcement only** — a script that runs the project's configured test and lint commands and blocks the PR until both pass. No structured review findings, risk labels, or evidence databases.
+2. **Plain git worktrees, no pooling.** We use `git worktree add` / `git worktree remove` directly, with no worktree pool. Our spawn/teardown scripts wrap these commands.
+3. **A consistent toolbelt.** All `bin/` helper scripts share the `em-*` naming scheme and a common set of conventions.
 
 This document describes v1 only; nothing beyond it is planned yet.
 
@@ -66,10 +65,10 @@ An individual developer (the Director) who works across one or more git reposito
 | **Director** | The human user. Makes decisions, approves merges, watches when curious. |
 | **EM (Engineering Manager)** | The single agent the Director talks to. Delegates all project work; never edits projects itself. |
 | **IC (Individual Contributor)** | An autonomous agent spawned per task in a tmux window + disposable worktree. Never addresses the Director directly. |
-| **Build task** | Deliverable is a change to a project. Ships via the project's delivery mode (PR or local merge). (firstmate: "ship") |
-| **Research task** | Deliverable is knowledge: an investigation, plan, bug repro, or audit. Ends in a report file, never a PR. (firstmate: "scout") |
+| **Build task** | Deliverable is a change to a project. Ships via the project's delivery mode (PR or local merge). |
+| **Research task** | Deliverable is knowledge: an investigation, plan, bug repro, or audit. Ends in a report file, never a PR. |
 | **Delivery mode** | Per-project setting for how finished work lands: `gated` (default — IC must pass the project's test + lint gate, then PR → Director merge), `direct-PR` (push + PR, no gate), or `local-only` (local branch, EM reviews + fast-forward merges on approval). |
-| **Autonomy flag (`+auto`)** | Optional per-project flag: EM makes routine approval calls itself; destructive/irreversible/security-sensitive decisions still escalate. Default off. (firstmate: "+yolo") |
+| **Autonomy flag (`+auto`)** | Optional per-project flag: EM makes routine approval calls itself; destructive/irreversible/security-sensitive decisions still escalate. Default off. |
 | **Brief** | Per-task instruction file given to an IC: task, acceptance criteria, branch/reporting/delivery contract. |
 | **Watcher** | Background bash process that sleeps on the fleet and wakes the EM only when something needs it. |
 
@@ -79,7 +78,7 @@ An individual developer (the Director) who works across one or more git reposito
 
 ### 4.1 The EM's prime directives (hard rules, priority order)
 
-1. **Never write to a project.** The EM must not edit, commit to, or run state-changing commands in anything under `projects/` or any worktree. Exactly two sanctioned exceptions: (a) fleet sync — clean fast-forward of a clone's checked-out default branch to match origin plus safe pruning of local branches whose upstream is gone and no worktree needs, (b) the approved `local-only` fast-forward merge. (Our gated mode needs no in-project initialization — see §4.6 — so firstmate's third exception does not apply.) Project memory files (`AGENTS.md`) are created/updated only by ICs through the normal delivery path.
+1. **Never write to a project.** The EM must not edit, commit to, or run state-changing commands in anything under `projects/` or any worktree. Exactly two sanctioned exceptions: (a) fleet sync — clean fast-forward of a clone's checked-out default branch to match origin plus safe pruning of local branches whose upstream is gone and no worktree needs, (b) the approved `local-only` fast-forward merge. (Our gated mode needs no in-project initialization — see §4.6.) Project memory files (`AGENTS.md`) are created/updated only by ICs through the normal delivery path.
 2. **Never merge a PR without the Director's explicit word**, except routine approvals on `+auto` projects (destructive/irreversible/security-sensitive items always escalate; never merge a red PR even under `+auto`; post a one-line FYI after any autonomous merge).
 3. **Never tear down a worktree holding unlanded work.** The teardown script enforces this; `--force` only on explicit Director instruction to discard. Research-task worktrees are declared scratch — teardown requires only that the report exists.
 4. **ICs never address the Director.** All communication flows through the EM. If the Director types into an IC's window directly, that is authoritative; the EM reconciles at the next heartbeat.
@@ -229,8 +228,8 @@ Queued is re-evaluated on every teardown and heartbeat; Done keeps only the 10 m
 | `em-brief.sh` | Scaffold a build brief, or a report-only research brief with `--research` |
 | `em-ensure-agents-md.sh` | Ensure project `AGENTS.md` is real and `CLAUDE.md` symlinks to it |
 | `em-guard.sh` | Warn when tasks are in flight but the watcher beacon is stale/missing |
-| `em-worktree.sh` | Thin wrapper over `git worktree add / remove / prune` with our naming and safety conventions (replaces treehouse) |
-| `em-validate.sh` | The gate: run the project's configured test + lint commands in the task worktree; non-zero on any failure (replaces no-mistakes) |
+| `em-worktree.sh` | Thin wrapper over `git worktree add / remove / prune` with our naming and safety conventions (no worktree pool) |
+| `em-validate.sh` | The gate: run the project's configured test + lint commands in the task worktree; non-zero on any failure (minimal built-in test + lint enforcement) |
 | `em-spawn.sh` | Window → fresh `git worktree` → agent launched with its brief; records task kind/mode and the launch command; post-launch pane check for trust dialogs |
 | `em-relaunch.sh` | Replay a stuck task's recorded launch command in its existing window + worktree, optionally appending a progress note to the brief |
 | `em-project-mode.sh` | Resolve a project's delivery mode and `+auto` flag from the registry |
@@ -249,7 +248,7 @@ Queued is re-evaluated on every teardown and heartbeat; Done keeps only the 10 m
 
 All scripts: bash, shellcheck-clean (CI-enforced), each self-documenting via a header.
 
-**Porting strategy:** every script above except `em-worktree.sh` and `em-validate.sh` (our two replacement pieces) and the post-v1 additions `em-status.sh`, `em-relaunch.sh`, and `em-project-add.sh` (ours outright) is a direct port of its firstmate counterpart (`fm-*` → `em-*`), with treehouse calls swapped for `em-worktree.sh` / raw `git worktree` and no-mistakes hooks replaced by `em-validate.sh` calls in the brief scaffold and mode resolution. Preserve firstmate's MIT attribution in the LICENSE/NOTICE for ported code.
+**Toolbelt conventions:** `em-worktree.sh` centralizes all worktree operations (raw `git worktree`) and `em-validate.sh` is the gate wired into the brief scaffold and mode resolution; other scripts that touch worktrees or validation call into these rather than reimplementing them.
 
 ### 4.12 Configuration
 
@@ -259,15 +258,15 @@ All scripts: bash, shellcheck-clean (CI-enforced), each self-documenting via a h
 
 ### 4.13 Persona and tone
 
-The EM addresses the user with light "engineering org" flavor (e.g., occasional "boss" / manager-speak) where firstmate uses nautical flavor — kept optional, never in commits/briefs/PRs or anything ICs read, and dropped entirely for bad news or serious findings. Every Director-facing message is a plain outcome about the Director's work.
+The EM addresses the user with light "engineering org" flavor (e.g., occasional "boss" / manager-speak) — kept optional, never in commits/briefs/PRs or anything ICs read, and dropped entirely for bad news or serious findings. Every Director-facing message is a plain outcome about the Director's work.
 
 ---
 
 ## 5. Dependencies and Prerequisites
 
 - **Required from the user:** a verified agent harness (claude / codex / opencode / pi), git (≥ 2.5 for `git worktree`) + GitHub auth (`gh auth login`), tmux (offered for install if missing).
-- **Detected/installed with consent:** tmux, `gh` CLI, and any helper tools we port alongside the toolbelt (GitHub helper, browser-automation helper, rich-review-surface helper — ported from firstmate's ecosystem as-is).
-- **Deliberately NOT dependencies (locked decisions):** *treehouse* — replaced by plain `git worktree` via `em-worktree.sh`; *no-mistakes* — replaced by our minimal built-in `em-validate.sh` gate (test + lint enforcement only).
+- **Detected/installed with consent:** tmux, `gh` CLI, and any helper tools that ship alongside the toolbelt (GitHub helper, browser-automation helper, rich-review-surface helper).
+- **Deliberately NOT dependencies (locked decisions):** any external worktree-pool manager — replaced by plain `git worktree` via `em-worktree.sh`; any external review pipeline — replaced by our minimal built-in `em-validate.sh` gate (test + lint enforcement only).
 - **Platforms:** macOS and Linux.
 - **Language:** the toolbelt is 100% shell; the orchestrator is markdown prompt-ware.
 
@@ -294,6 +293,6 @@ The EM addresses the user with light "engineering org" flavor (e.g., occasional 
 2. **Gate scope edge cases:** projects with no tests or no linter — allow a `gated` project with only one of the two commands, or require `direct-PR` instead?
 3. **Naming:** final product name, and final terminology (EM/IC/Director vs. other framings).
 4. **Persona intensity:** how much manager-flavor, if any, versus fully plain tone.
-5. **License/attribution:** firstmate is MIT; since we are porting its scripts directly, retain its copyright notice per MIT.
-6. **Windows support:** out of scope like firstmate (macOS/Linux only), or WSL-documented?
+5. **License/attribution:** released under MIT; keep the LICENSE current as the project evolves.
+6. **Windows support:** out of scope (macOS/Linux only), or WSL-documented?
 7. **Helper-tool porting order:** the gh/browser/review helpers are "copy exactly" — confirm which are actually needed for M1–M2 vs. deferrable.

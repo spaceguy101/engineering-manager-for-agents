@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # em-validate.sh — the gate: run the project's configured test and lint
 # commands inside the task's worktree; exit non-zero on any failure.
-# Replaces firstmate's no-mistakes (PRD key scoping decision 1): test + lint
+# Minimal built-in gate (PRD key scoping decision 1): test + lint
 # enforcement only — no review findings, risk labels, or evidence databases.
 #
 # Usage:

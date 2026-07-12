@@ -10,7 +10,7 @@
 Prime directive #1 forbids the EM from writing to anything under `projects/`
 or any worktree, and PRD §4.1 names "exactly two" exceptions (fleet-sync
 fast-forward/prune, approved `local-only` merge). But installing the IC
-turn-end hook requires two writes at spawn time, both ported from firstmate:
+turn-end hook requires two writes at spawn time:
 
 1. `<worktree>/.claude/settings.local.json` — the Stop hook that touches
    `state/<id>.turn-ended`.
