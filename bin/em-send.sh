@@ -11,6 +11,7 @@
 set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
+"$EM_BIN/em-guard.sh"
 
 main() {
   local id="${1:-}"

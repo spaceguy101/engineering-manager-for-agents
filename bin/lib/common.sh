@@ -15,8 +15,12 @@
 #   window_name    canonical tmux window name for a task: em-<id>
 #   tmux_cmd       tmux, honoring EM_TMUX_SOCKET (test isolation seam)
 #   find_window    print a tmux target for a task's window, in any session
-#   meta_path/meta_get   accessors for state/<id>.meta (key=value lines)
+#   meta_path/meta_get/meta_set   accessors for state/<id>.meta (key=value)
 #   default_branch       resolve origin's default branch name for a clone
+#   mtime                file modification epoch (portable macOS/Linux)
+#   run_bounded          run a command with a kill-after timeout (no GNU
+#                        timeout dependency)
+#   in_flight_ids        ids of every task with a state/<id>.meta record
 
 # shellcheck disable=SC2034  # path vars are consumed by the sourcing scripts
 
@@ -90,6 +94,52 @@ meta_get() {
   file="$(meta_path "$1")"
   [ -f "$file" ] || return 1
   awk -v k="$2" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$file"
+}
+
+# meta_set <id> <key> <value> — rewrite (or append) one key in state/<id>.meta.
+meta_set() {
+  local file tmp
+  file="$(meta_path "$1")"
+  [ -f "$file" ] || return 1
+  tmp="$file.tmp.$$"
+  awk -v k="$2" -v v="$3" '
+    index($0, k "=") == 1 { print k "=" v; done = 1; next }
+    { print }
+    END { if (!done) print k "=" v }
+  ' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+# mtime <file> — modification time as epoch seconds (BSD and GNU stat).
+mtime() {
+  stat -f %m -- "$1" 2>/dev/null || stat -c %Y -- "$1" 2>/dev/null
+}
+
+# run_bounded <seconds> <cmd…> — run a command, killing it after <seconds>.
+# Returns the command's status (or the kill status on timeout).
+run_bounded() {
+  local secs="$1" pid watchdog rc=0
+  shift
+  "$@" &
+  pid=$!
+  (
+    sleep "$secs"
+    kill "$pid" 2>/dev/null
+  ) &
+  watchdog=$!
+  wait "$pid" || rc=$?
+  kill "$watchdog" 2>/dev/null
+  wait "$watchdog" 2>/dev/null || true
+  return "$rc"
+}
+
+# in_flight_ids — print the id of every task with a meta record, one per line.
+in_flight_ids() {
+  local f
+  for f in "$EM_STATE"/*.meta; do
+    [ -f "$f" ] || continue
+    f="${f##*/}"
+    printf '%s\n' "${f%.meta}"
+  done
 }
 
 # default_branch <repo-dir> — name of origin's default branch (e.g. "main").

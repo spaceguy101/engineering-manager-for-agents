@@ -11,6 +11,7 @@
 set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
+"$EM_BIN/em-guard.sh"
 
 main() {
   local id="${1:-}" force="${2:-}"
@@ -43,7 +44,7 @@ main() {
     tmux_cmd kill-window -t "$target"
   fi
 
-  rm -f "$EM_STATE/$id".*
+  rm -f "$EM_STATE/$id".* "$EM_STATE/.watch."*".$id"
   log "teardown of $id complete (data/$id/ kept)"
 }
 

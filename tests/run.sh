@@ -168,6 +168,67 @@ expect "--force overwrites" "$BIN/em-brief.sh" tst-b1 demo --force
 expect_rc "--research is not available until M4" 1 "$BIN/em-brief.sh" tst-b2 demo --research
 expect_rc "wants an existing clone" 1 "$BIN/em-brief.sh" tst-b3 nosuch
 
+# ------------------------------------------------------- M2: guard and lock
+note "em-guard.sh — beacon liveness warnings"
+BEACON="$EM_ROOT/state/.last-watcher-beat"
+expect "silent when nothing is in flight" \
+  test -z "$("$BIN/em-guard.sh" 2>&1)"
+mkdir -p "$EM_ROOT/state"
+printf 'window=em-tst-g1\n' > "$EM_ROOT/state/tst-g1.meta"
+rm -f "$BEACON"
+out="$("$BIN/em-guard.sh" 2>&1)"
+expect "warns when tasks in flight and beacon missing" grep -q beacon <<< "$out"
+touch "$BEACON"
+expect "silent when the beacon is fresh" test -z "$("$BIN/em-guard.sh" 2>&1)"
+sleep 1
+out="$(EM_GUARD_GRACE=0 "$BIN/em-guard.sh" 2>&1)"
+expect "warns when the beacon is older than the grace" grep -q beacon <<< "$out"
+rm -f "$EM_ROOT/state/tst-g1.meta"
+
+note "em-lock.sh — single-EM session lock"
+expect "acquire when unlocked" env EM_SESSION_PID=$$ "$BIN/em-lock.sh" acquire
+expect "status shows the holder" grep -q "pid=$$" <(env EM_SESSION_PID=$$ "$BIN/em-lock.sh" status)
+expect "re-acquire by the same session is fine" env EM_SESSION_PID=$$ "$BIN/em-lock.sh" acquire
+sleep 30 &
+OTHER=$!
+printf 'pid=%s\nsince=now\n' "$OTHER" > "$EM_ROOT/state/.session-lock"
+expect_rc "REFUSES (3) when a live session holds it" 3 env EM_SESSION_PID=$$ "$BIN/em-lock.sh" acquire
+kill "$OTHER" 2>/dev/null; wait "$OTHER" 2>/dev/null
+expect "takes over a dead session's stale lock" env EM_SESSION_PID=$$ "$BIN/em-lock.sh" acquire
+"$BIN/em-lock.sh" release
+expect "release unlocks" grep -q unlocked <("$BIN/em-lock.sh" status)
+
+# ------------------------------------------------------------- M2: em-watch
+note "em-watch.sh — signal/stale/check/heartbeat (fast timers)"
+watch_fast() {
+  env EM_POLL=1 EM_SIGNAL_GRACE=1 EM_HEARTBEAT=2 EM_HEARTBEAT_MAX=8 \
+    EM_CHECK_INTERVAL=1 EM_CHECK_TIMEOUT=5 "$BIN/em-watch.sh"
+}
+out="$(watch_fast)"
+expect "reports idle with no tasks in flight" test "$out" = "idle"
+printf 'window=em-tst-w1\n' > "$EM_ROOT/state/tst-w1.meta"
+echo "starting: warming up" >> "$EM_ROOT/state/tst-w1.status"
+out="$(run_bounded 20 watch_fast)"
+expect "fires signal on a new status line" test "$out" = "signal tst-w1"
+expect "records the surfaced line count" test "$(cat "$EM_ROOT/state/.watch.seen.tst-w1")" = "1"
+expect "touches the liveness beacon" test -f "$BEACON"
+sleep 2
+touch "$EM_ROOT/state/tst-w1.turn-ended"
+rm -f "$EM_ROOT/state/.watch.next-beat" # fast timers: don't let a due heartbeat preempt the stale case
+out="$(run_bounded 20 watch_fast)"
+expect "fires stale when a turn ends silently" test "$out" = "stale tst-w1"
+out="$(run_bounded 25 watch_fast)"
+expect "no stale refire; heartbeat fires next" test "$out" = "heartbeat"
+expect "heartbeat streak recorded" test "$(cat "$EM_ROOT/state/.watch.streak")" = "1"
+echo "working: phase two" >> "$EM_ROOT/state/tst-w1.status"
+out="$(run_bounded 20 watch_fast)"
+expect "second signal fires" test "$out" = "signal tst-w1"
+expect "non-heartbeat wake resets the backoff streak" test "$(cat "$EM_ROOT/state/.watch.streak")" = "0"
+printf 'echo "PR merged"\n' > "$EM_ROOT/state/tst-w1.check.sh"
+out="$(run_bounded 20 watch_fast)"
+expect "per-task check fires with its output" test "$out" = "check tst-w1: PR merged"
+rm -f "$EM_ROOT/state/tst-w1".* "$EM_ROOT/state/.watch."*
+
 # ----------------------------------------------------------- tmux-dependent
 if ! command -v tmux >/dev/null; then
   skip "tmux not installed — em-spawn/em-send/em-peek/em-teardown cases skipped"

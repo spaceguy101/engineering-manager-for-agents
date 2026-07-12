@@ -18,6 +18,7 @@
 set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
+"$EM_BIN/em-guard.sh"
 
 # Inside a usable tmux session? (The test socket seam never counts as inside:
 # $TMUX points at the real server, not the isolated test one.)
