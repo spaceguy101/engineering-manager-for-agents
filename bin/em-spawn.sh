@@ -72,6 +72,12 @@ main() {
   [ ! -f "$(meta_path "$id")" ] || die "task $id already has a meta record"
   ! find_window "$id" >/dev/null || die "window $(window_name "$id") already exists"
 
+  local mode auto
+  if ! mode="$("$EM_BIN/em-project-mode.sh" "$repo" mode 2>/dev/null)"; then
+    mode=direct-PR
+  fi
+  auto="$("$EM_BIN/em-project-mode.sh" "$repo" auto 2>/dev/null || printf '0')"
+
   local wt
   wt="$("$EM_BIN/em-worktree.sh" add "$id" "$repo")"
 
@@ -85,8 +91,8 @@ worktree=$wt
 project=$repo
 harness=$harness
 kind=build
-mode=direct-PR
-auto=0
+mode=$mode
+auto=$auto
 pr=
 spawned=$(date +%Y-%m-%dT%H:%M:%S)
 EOF

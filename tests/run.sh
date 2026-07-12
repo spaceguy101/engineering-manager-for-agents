@@ -168,6 +168,142 @@ expect "--force overwrites" "$BIN/em-brief.sh" tst-b1 demo --force
 expect_rc "--research is not available until M4" 1 "$BIN/em-brief.sh" tst-b2 demo --research
 expect_rc "wants an existing clone" 1 "$BIN/em-brief.sh" tst-b3 nosuch
 
+# -------------------------------------------------- M3: registry and modes
+note "em-project-mode.sh — registry parsing"
+mkdir -p "$EM_ROOT/data"
+cat > "$EM_ROOT/data/projects.md" <<'REG'
+# Projects
+- demo [direct-PR] - throwaway test project (added 2026-07-12)
+- loco [local-only] - remote-less project (added 2026-07-12)
+- gp [gated +auto] - gated project (added 2026-07-12) | test: bash -c 'exit 0' | lint: echo lint-ok
+- gbad [gated] - failing gate (added 2026-07-12) | test: bash -c 'exit 1'
+- gnone [gated] - gated without commands (added 2026-07-12)
+REG
+expect "resolves mode" test "$("$BIN/em-project-mode.sh" demo)" = "direct-PR"
+expect "resolves local-only" test "$("$BIN/em-project-mode.sh" loco mode)" = "local-only"
+expect "resolves gated" test "$("$BIN/em-project-mode.sh" gp mode)" = "gated"
+expect "+auto detected" test "$("$BIN/em-project-mode.sh" gp auto)" = "1"
+expect "no +auto means 0" test "$("$BIN/em-project-mode.sh" demo auto)" = "0"
+expect "extracts the test command" test "$("$BIN/em-project-mode.sh" gp test)" = "bash -c 'exit 0'"
+expect "extracts the lint command" test "$("$BIN/em-project-mode.sh" gp lint)" = "echo lint-ok"
+expect "unset gate command is empty" test -z "$("$BIN/em-project-mode.sh" loco test)"
+expect_rc "unknown project fails" 1 "$BIN/em-project-mode.sh" nosuch
+
+note "em-validate.sh — the test+lint gate"
+fake_meta() { # <id> <project>
+  mkdir -p "$EM_ROOT/state"
+  printf 'window=em-%s\nworktree=%s\nproject=%s\nkind=build\n' \
+    "$1" "$EM_ROOT/worktrees/$1" "$2" > "$EM_ROOT/state/$1.meta"
+}
+make_project gp
+make_project gbad
+make_project gnone
+"$BIN/em-worktree.sh" add tst-v1 gp >/dev/null && fake_meta tst-v1 gp
+out="$("$BIN/em-validate.sh" tst-v1 2>&1)"
+expect "green gate passes" grep -q 'gate: GREEN' <<< "$out"
+"$BIN/em-worktree.sh" add tst-v2 gbad >/dev/null && fake_meta tst-v2 gbad
+expect_rc "red gate fails non-zero" 1 "$BIN/em-validate.sh" tst-v2
+"$BIN/em-worktree.sh" add tst-v3 gnone >/dev/null && fake_meta tst-v3 gnone
+expect_rc "gated with no commands fails" 1 "$BIN/em-validate.sh" tst-v3
+
+note "em-brief.sh — delivery contract follows the registry mode"
+"$BIN/em-brief.sh" tst-b8 gp >/dev/null
+expect "gated brief requires the gate" grep -q 'em-validate.sh tst-b8' "$EM_ROOT/data/tst-b8/brief.md"
+expect "gated brief reports gate green" grep -q 'gate green' "$EM_ROOT/data/tst-b8/brief.md"
+"$BIN/em-brief.sh" tst-b9 loco >/dev/null
+expect "local-only brief stops at the branch" grep -q 'ready in branch em/tst-b9' "$EM_ROOT/data/tst-b9/brief.md"
+expect "local-only brief never opens a PR" test -z "$(grep 'gh pr create' "$EM_ROOT/data/tst-b9/brief.md")"
+expect "no-remote brief bases on the local branch" grep -q "detached at \`main\`" "$EM_ROOT/data/tst-b9/brief.md"
+expect_rc "gated project without gate commands cannot be briefed" 1 "$BIN/em-brief.sh" tst-b7 gnone
+make_project unreg
+expect "unregistered project falls back to direct-PR" "$BIN/em-brief.sh" tst-b6 unreg
+expect "fallback brief opens a PR" grep -q 'gh pr create' "$EM_ROOT/data/tst-b6/brief.md"
+
+note "em-review-diff.sh — branch vs authoritative base"
+"$BIN/em-worktree.sh" add tst-r1 demo >/dev/null && fake_meta tst-r1 demo
+(
+  cd "$EM_ROOT/worktrees/tst-r1" &&
+    git checkout -qb em/tst-r1 &&
+    echo reviewed > review.txt &&
+    git add . && git commit -qm review-me
+)
+expect "diff shows the branch change" grep -q 'review.txt' <("$BIN/em-review-diff.sh" tst-r1)
+expect "--stat summarizes" grep -q '1 file' <("$BIN/em-review-diff.sh" tst-r1 --stat)
+"$BIN/em-worktree.sh" add tst-r2 demo >/dev/null && fake_meta tst-r2 demo
+expect_rc "no branch yet fails plainly" 1 "$BIN/em-review-diff.sh" tst-r2
+
+note "em-merge-local.sh — approved fast-forward only"
+"$BIN/em-worktree.sh" add tst-m1 loco >/dev/null && fake_meta tst-m1 loco
+(
+  cd "$EM_ROOT/worktrees/tst-m1" &&
+    git checkout -qb em/tst-m1 &&
+    echo feature > feature.txt &&
+    git add . && git commit -qm feature
+)
+expect_rc "refuses non-local-only projects" 1 "$BIN/em-merge-local.sh" tst-r1
+echo dirt > "$EM_ROOT/projects/loco/dirt.txt"
+expect_rc "REFUSES (3) a dirty clone" 3 "$BIN/em-merge-local.sh" tst-m1
+rm "$EM_ROOT/projects/loco/dirt.txt"
+expect "fast-forwards local main on approval" "$BIN/em-merge-local.sh" tst-m1
+expect "main now at the IC's commit" test \
+  "$(git -C "$EM_ROOT/projects/loco" rev-parse main)" = \
+  "$(git -C "$EM_ROOT/projects/loco" rev-parse em/tst-m1)"
+"$BIN/em-worktree.sh" add tst-m2 loco >/dev/null && fake_meta tst-m2 loco
+(
+  cd "$EM_ROOT/worktrees/tst-m2" &&
+    git checkout -qb em/tst-m2 &&
+    echo other > other.txt &&
+    git add . && git commit -qm other
+)
+(
+  cd "$EM_ROOT/projects/loco" &&
+    echo drift >> README.md &&
+    git add . && git commit -qm drift
+)
+expect_rc "REFUSES (3) a non-fast-forward" 3 "$BIN/em-merge-local.sh" tst-m2
+
+note "em-pr-check.sh — arm the merge poll"
+fake_meta tst-p1 demo
+expect_rc "rejects a non-PR url" 1 "$BIN/em-pr-check.sh" tst-p1 https://example.com/nope
+expect "records the PR and writes the check" "$BIN/em-pr-check.sh" tst-p1 https://github.com/o/r/pull/7
+expect "meta carries the PR url" grep -qx 'pr=https://github.com/o/r/pull/7' "$EM_ROOT/state/tst-p1.meta"
+expect "check script is executable" test -x "$EM_ROOT/state/tst-p1.check.sh"
+expect "check script polls that PR" grep -q 'github.com/o/r/pull/7' "$EM_ROOT/state/tst-p1.check.sh"
+
+note "em-fleet-sync.sh — fetch, fast-forward, safe prune"
+make_project fs1
+expect "fresh clone is up to date" grep -q 'up to date' <("$BIN/em-fleet-sync.sh" fs1)
+(
+  cd "$SANDBOX/seed-fs1" &&
+    echo more > more.txt &&
+    git add . && git commit -qm more && git push -q origin main
+)
+expect "fast-forwards a clone behind origin" grep -q 'fast-forwarded' <("$BIN/em-fleet-sync.sh" fs1)
+(
+  cd "$EM_ROOT/projects/fs1" &&
+    git checkout -qb dead && git push -qu origin dead 2>/dev/null &&
+    git checkout -q main && git push -q origin :dead 2>/dev/null
+)
+expect "prunes a branch whose upstream is gone" grep -q 'pruned dead' <("$BIN/em-fleet-sync.sh" fs1)
+expect "branch really deleted" test -z "$(git -C "$EM_ROOT/projects/fs1" branch --list dead)"
+(
+  cd "$EM_ROOT/projects/fs1" &&
+    git checkout -qb em/tst-pp && git push -qu origin em/tst-pp 2>/dev/null &&
+    git checkout -q main && git push -q origin :em/tst-pp 2>/dev/null
+)
+fake_meta tst-pp fs1
+"$BIN/em-fleet-sync.sh" fs1 >/dev/null
+expect "never prunes an in-flight task's branch" \
+  git -C "$EM_ROOT/projects/fs1" show-ref --verify --quiet refs/heads/em/tst-pp
+rm "$EM_ROOT/state/tst-pp.meta"
+"$BIN/em-fleet-sync.sh" fs1 >/dev/null
+expect "prunes it once the task is gone" test -z "$(git -C "$EM_ROOT/projects/fs1" branch --list 'em/tst-pp')"
+expect "no-remote projects are skipped" grep -q 'no remote' <("$BIN/em-fleet-sync.sh" loco)
+ln -s "$SANDBOX/seed-fs1" "$EM_ROOT/projects/simu"
+expect "symlinked working copies are fetch-only" grep -q 'symlinked' <("$BIN/em-fleet-sync.sh" simu)
+rm "$EM_ROOT/projects/simu"
+rm -f "$EM_ROOT/state/"*.meta "$EM_ROOT/state/"*.check.sh # M3 fixtures: nothing in flight for the M2 cases
+
 # ------------------------------------------------------- M2: guard and lock
 note "em-guard.sh — beacon liveness warnings"
 BEACON="$EM_ROOT/state/.last-watcher-beat"
