@@ -18,7 +18,7 @@ The shared vocabulary of this system. Terms here are canonical; use them consist
 - **Gate** — the test+lint check (`em-validate.sh`) an IC must pass before delivering in `gated` mode. (M3.)
 - **Autonomy flag (`+auto`)** — optional per-project flag letting the EM make routine approval calls itself; destructive/irreversible/security-sensitive decisions still escalate. Default off. (M3.)
 - **Landed** — work that exists on a durable remote/base ref (pushed branch, merged commit) and therefore survives worktree destruction.
-- **Unlanded work** — work that exists *only* locally in a worktree (uncommitted changes, or commits not reachable from any remote ref). Teardown must refuse to destroy it (prime directive #3).
+- **Unlanded work** — work that exists *only* locally in a worktree: uncommitted/untracked changes, or commits reachable from the worktree `HEAD` or its `em/<id>` branch that no landed ref (remote ref, or the clone's default branch) reaches. Teardown must refuse to destroy it (prime directive #3; scope and blind spots in [ADR-0002](adr/0002-conservative-unlanded-work-check.md)).
 
 ## Execution & isolation
 - **Worktree** — a disposable `git worktree` under `worktrees/<id>/`, detached at the fetched default branch, where one IC does its work. Plain `git worktree` (no pool).
@@ -32,7 +32,7 @@ The shared vocabulary of this system. Terms here are canonical; use them consist
 - **Session lock** — single-EM-per-machine lock (`em-lock.sh`).
 
 ## Lifecycle operations
-- **Spawn** — create window + worktree + turn-end hook + meta, launch the IC with its brief (`em-spawn.sh`).
+- **Spawn** — create window + worktree + turn-end hook + meta, launch the IC with its brief (`em-spawn.sh`). Its hook-install writes are sanctioned *spawn provisioning*, distinct from "the EM writing to a project" ([ADR-0003](adr/0003-spawn-provisioning-writes.md)).
 - **Teardown** — return the worktree and kill the window (`em-teardown.sh`); refuses on unlanded work; keeps `data/<id>/`.
 - **Fleet sync** — fetch clones, clean fast-forward default branches, prune gone branches (`em-fleet-sync.sh`). M3.
 - **Promotion** — convert a research task in place into a protected build task (`em-promote.sh`). M4.

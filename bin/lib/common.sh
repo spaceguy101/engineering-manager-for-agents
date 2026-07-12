@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# common.sh — shared helpers for the em-* toolbelt. Source, don't execute.
+#
+# Exposes:
+#   EM_BIN         directory holding the em-* scripts (this install)
+#   EM_ROOT        fleet root holding data/ state/ projects/ worktrees/;
+#                  defaults to the repo containing EM_BIN. Overriding it via
+#                  the EM_ROOT env var relocates all fleet state (the test
+#                  suite sandboxes itself this way).
+#   EM_DATA EM_STATE EM_PROJECTS EM_WORKTREES EM_TEMPLATES
+#   log/warn/die   stderr messaging; die exits 1
+#   die_refuse     safety refusal; exits 3 — treat as stop-and-investigate
+#   usage          print the calling script's header comment block
+#   require_id     validate a task id (kebab slug, e.g. fix-login-k3)
+#   window_name    canonical tmux window name for a task: em-<id>
+#   tmux_cmd       tmux, honoring EM_TMUX_SOCKET (test isolation seam)
+#   find_window    print a tmux target for a task's window, in any session
+#   meta_path/meta_get   accessors for state/<id>.meta (key=value lines)
+#   default_branch       resolve origin's default branch name for a clone
+
+# shellcheck disable=SC2034  # path vars are consumed by the sourcing scripts
+
+EM_BIN="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+EM_ROOT="${EM_ROOT:-$(cd -- "$EM_BIN/.." && pwd -P)}"
+EM_DATA="$EM_ROOT/data"
+EM_STATE="$EM_ROOT/state"
+EM_PROJECTS="$EM_ROOT/projects"
+EM_WORKTREES="$EM_ROOT/worktrees"
+EM_TEMPLATES="$(cd -- "$EM_BIN/.." && pwd -P)/templates"
+
+log() { printf '%s\n' "$*" >&2; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+# Safety refusal (distinct from ordinary errors): exit 3. Callers seeing exit 3
+# must stop and investigate, never retry with --force on their own initiative.
+die_refuse() {
+  printf 'REFUSED: %s\n' "$*" >&2
+  exit 3
+}
+
+# Print the calling script's header comment block (self-documentation).
+usage() {
+  awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+}
+
+require_id() {
+  case "${1:-}" in
+    '' | -* | *- | *[!a-z0-9-]*)
+      die "invalid task id '${1:-}' — want a kebab slug like fix-login-k3"
+      ;;
+  esac
+}
+
+window_name() {
+  printf 'em-%s\n' "$1"
+}
+
+# tmux, on the isolated test socket when EM_TMUX_SOCKET is set (test-only seam).
+tmux_cmd() {
+  if [ -n "${EM_TMUX_SOCKET:-}" ]; then
+    command tmux -L "$EM_TMUX_SOCKET" "$@"
+  else
+    command tmux "$@"
+  fi
+}
+
+# Print "<session_id>:<window_index>" for a task's window, searching all
+# sessions (the window lives in the EM's session or the dedicated 'em' one).
+# Fails silently (status 1) when the window does not exist.
+find_window() {
+  local name out
+  name="$(window_name "$1")"
+  out="$(tmux_cmd list-windows -a -F '#{window_name}|#{session_id}:#{window_index}' 2>/dev/null |
+    awk -F '|' -v n="$name" '$1 == n { print $2; exit }')"
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out"
+}
+
+meta_path() {
+  printf '%s/%s.meta\n' "$EM_STATE" "$1"
+}
+
+# meta_get <id> <key> — print the value recorded in state/<id>.meta, or fail.
+meta_get() {
+  local file
+  file="$(meta_path "$1")"
+  [ -f "$file" ] || return 1
+  awk -v k="$2" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$file"
+}
+
+# default_branch <repo-dir> — name of origin's default branch (e.g. "main").
+# Falls back to asking the remote when origin/HEAD is unset locally. For a
+# repo with no origin remote (local-only projects), falls back to the clone's
+# checked-out branch — only call this on the clone itself, never a worktree
+# (a worktree's HEAD is the task branch, not the default).
+default_branch() {
+  local repo="$1" ref
+  if ref="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD)"; then
+    printf '%s\n' "${ref#origin/}"
+    return 0
+  fi
+  if ! git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+    git -C "$repo" symbolic-ref --quiet --short HEAD
+    return
+  fi
+  if git -C "$repo" remote set-head origin --auto >/dev/null 2>&1 &&
+    ref="$(git -C "$repo" symbolic-ref --quiet --short refs/remotes/origin/HEAD)"; then
+    printf '%s\n' "${ref#origin/}"
+    return 0
+  fi
+  return 1
+}

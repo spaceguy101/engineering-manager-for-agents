@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# tests/run.sh — pure-bash test suite for the em-* toolbelt (no framework).
+#
+# Sandboxes all fleet state under a temp EM_ROOT and runs tmux-dependent
+# cases on an isolated server (EM_TMUX_SOCKET); those cases SKIP (not fail)
+# when tmux is missing. Safety refusal paths (exit 3, ADR-0002) are the
+# flagship assertions. Exits non-zero if any case fails.
+set -uo pipefail
+
+TESTS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_DIR="$(cd -- "$TESTS_DIR/.." && pwd -P)"
+BIN="$REPO_DIR/bin"
+
+command -v git >/dev/null || { echo "SKIP: git not installed — cannot test anything" >&2; exit 0; }
+
+SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/em-tests.XXXXXX")"
+export EM_ROOT="$SANDBOX/fleet"
+export EM_TMUX_SOCKET="em-test-$$"
+mkdir -p "$EM_ROOT/projects"
+
+# Hermetic git: identity via env, no user/system config.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+export GIT_AUTHOR_NAME=em-test GIT_AUTHOR_EMAIL=em-test@example.invalid
+export GIT_COMMITTER_NAME=em-test GIT_COMMITTER_EMAIL=em-test@example.invalid
+
+# shellcheck source=bin/lib/common.sh
+source "$BIN/lib/common.sh"
+
+cleanup() {
+  tmux_cmd kill-server 2>/dev/null
+  rm -rf "$SANDBOX"
+}
+trap cleanup EXIT
+
+PASS=0 FAIL=0 SKIP=0
+ok() { PASS=$((PASS + 1)); printf 'ok   - %s\n' "$*"; }
+fail() { FAIL=$((FAIL + 1)); printf 'FAIL - %s\n' "$*"; }
+skip() { SKIP=$((SKIP + 1)); printf 'skip - %s\n' "$*"; }
+note() { printf '# %s\n' "$*"; }
+
+# expect <desc> <cmd...>          — pass iff cmd exits 0
+expect() {
+  local desc="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then ok "$desc"; else fail "$desc"; fi
+}
+
+# expect_rc <desc> <want> <cmd...> — pass iff cmd exits with code <want>
+expect_rc() {
+  local desc="$1" want="$2" rc=0
+  shift 2
+  "$@" >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq "$want" ]; then ok "$desc"; else fail "$desc (rc=$rc, want $want)"; fi
+}
+
+# make_project <name> — bare "origin" + seeded projects/<name> clone
+make_project() {
+  local name="$1" bare="$SANDBOX/remotes/$1.git" seed="$SANDBOX/seed-$1"
+  git init -q --bare -b main "$bare"
+  git clone -q "$bare" "$seed" 2>/dev/null
+  (
+    cd "$seed" &&
+      git checkout -qb main &&
+      echo hello > README.md &&
+      git add . && git commit -qm init &&
+      git push -q -u origin main
+  )
+  git clone -q "$bare" "$EM_ROOT/projects/$name" 2>/dev/null
+}
+
+# fill_task <id> — replace the {TASK} placeholder in a scaffolded brief
+fill_task() {
+  local f="$EM_ROOT/data/$1/brief.md" c
+  c="$(<"$f")"
+  printf '%s\n' "${c//\{TASK\}/Do nothing; this is a test task.}" > "$f"
+}
+
+# wait_for_pane <id> <needle> [tries] — poll em-peek until needle appears
+wait_for_pane() {
+  for _ in $(seq 1 "${3:-15}"); do
+    if "$BIN/em-peek.sh" "$1" 200 2>/dev/null | grep -qF "$2"; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------- worktree
+note "em-worktree.sh — lifecycle and the unlanded-work refusals (ADR-0002)"
+make_project demo
+WT="$EM_ROOT/worktrees"
+
+out="$("$BIN/em-worktree.sh" add tst-a1 demo)"
+expect "add prints the worktree path" test "$out" = "$WT/tst-a1"
+expect "worktree exists and is a worktree" git -C "$WT/tst-a1" rev-parse --is-inside-work-tree
+head_sha="$(git -C "$WT/tst-a1" rev-parse HEAD)"
+base_sha="$(git -C "$EM_ROOT/projects/demo" rev-parse origin/main)"
+expect "worktree is detached at fetched origin/main" test "$head_sha" = "$base_sha"
+expect_rc "add refuses a duplicate id" 1 "$BIN/em-worktree.sh" add tst-a1 demo
+expect_rc "add validates task ids" 1 "$BIN/em-worktree.sh" add 'Bad_ID' demo
+expect_rc "add wants an existing clone" 1 "$BIN/em-worktree.sh" add tst-a2 nosuch
+
+expect "clean worktree removes without --force" "$BIN/em-worktree.sh" remove tst-a1
+expect "worktree directory is gone" test ! -e "$WT/tst-a1"
+
+"$BIN/em-worktree.sh" add tst-a1 demo >/dev/null
+echo dirt > "$WT/tst-a1/scratch.txt"
+expect_rc "REFUSES (3) on uncommitted/untracked changes" 3 "$BIN/em-worktree.sh" remove tst-a1
+expect "refused worktree is untouched" test -e "$WT/tst-a1/scratch.txt"
+expect "--force removes it anyway" "$BIN/em-worktree.sh" remove tst-a1 --force
+
+"$BIN/em-worktree.sh" add tst-a1 demo >/dev/null
+(
+  cd "$WT/tst-a1" &&
+    git checkout -qb em/tst-a1 &&
+    echo change > file.txt &&
+    git add . && git commit -qm work
+)
+expect_rc "REFUSES (3) on unpushed em/<id> commits" 3 "$BIN/em-worktree.sh" remove tst-a1
+git -C "$WT/tst-a1" push -q -u origin em/tst-a1
+expect "removes once the branch is pushed (landed)" "$BIN/em-worktree.sh" remove tst-a1
+
+note "em-worktree.sh — merged-to-default-branch counts as landed (ADR-0002 amendment)"
+"$BIN/em-worktree.sh" add tst-a3 demo >/dev/null
+(
+  cd "$WT/tst-a3" &&
+    git checkout -qb em/tst-a3 &&
+    echo merged > merged.txt &&
+    git add . && git commit -qm merged-work
+)
+expect_rc "REFUSES (3) before the merge" 3 "$BIN/em-worktree.sh" remove tst-a3
+git -C "$EM_ROOT/projects/demo" merge -q --ff-only em/tst-a3
+expect "removes once merged into the clone's default branch" "$BIN/em-worktree.sh" remove tst-a3
+
+note "em-worktree.sh — no-remote (local-only) projects"
+git init -q -b main "$EM_ROOT/projects/loco"
+(
+  cd "$EM_ROOT/projects/loco" &&
+    echo local > README.md &&
+    git add . && git commit -qm init
+)
+out="$("$BIN/em-worktree.sh" add tst-l1 loco)"
+expect "add works without a remote" test "$out" = "$WT/tst-l1"
+head_sha="$(git -C "$WT/tst-l1" rev-parse HEAD)"
+base_sha="$(git -C "$EM_ROOT/projects/loco" rev-parse main)"
+expect "worktree is detached at the local default branch" test "$head_sha" = "$base_sha"
+(
+  cd "$WT/tst-l1" &&
+    git checkout -qb em/tst-l1 &&
+    echo work > work.txt &&
+    git add . && git commit -qm work
+)
+expect_rc "REFUSES (3) on unmerged local commits" 3 "$BIN/em-worktree.sh" remove tst-l1
+git -C "$EM_ROOT/projects/loco" merge -q --ff-only em/tst-l1
+expect "removes once merged into local main" "$BIN/em-worktree.sh" remove tst-l1
+
+# ------------------------------------------------------------------- brief
+note "em-brief.sh — template rendering"
+out="$("$BIN/em-brief.sh" tst-b1 demo)"
+BRIEF="$EM_ROOT/data/tst-b1/brief.md"
+expect "prints the brief path" test "$out" = "$BRIEF"
+expect "renders the branch name" grep -q 'em/tst-b1' "$BRIEF"
+expect "renders the absolute status file path" grep -qF "$EM_ROOT/state/tst-b1.status" "$BRIEF"
+expect "renders the default branch" grep -q 'origin/main' "$BRIEF"
+expect "leaves {TASK} for the EM to fill" grep -qF '{TASK}' "$BRIEF"
+expect "no unrendered {ID}/{REPO}/{BRANCH} placeholders" test -z "$(grep -E '\{(ID|REPO|BRANCH|DEFAULT_BRANCH|STATUS_FILE)\}' "$BRIEF")"
+expect_rc "refuses to overwrite an existing brief" 1 "$BIN/em-brief.sh" tst-b1 demo
+expect "--force overwrites" "$BIN/em-brief.sh" tst-b1 demo --force
+expect_rc "--research is not available until M4" 1 "$BIN/em-brief.sh" tst-b2 demo --research
+expect_rc "wants an existing clone" 1 "$BIN/em-brief.sh" tst-b3 nosuch
+
+# ----------------------------------------------------------- tmux-dependent
+if ! command -v tmux >/dev/null; then
+  skip "tmux not installed — em-spawn/em-send/em-peek/em-teardown cases skipped"
+else
+  note "em-spawn.sh — window + hook + meta + launch (isolated tmux server)"
+  mkdir -p "$SANDBOX/fakebin"
+  cat > "$SANDBOX/fakebin/claude" <<'EOF'
+#!/usr/bin/env bash
+echo "FAKE_IC_READY brief=$*"
+exec sleep 600
+EOF
+  chmod +x "$SANDBOX/fakebin/claude"
+  export EM_LAUNCH_OVERRIDE="$SANDBOX/fakebin/claude"
+
+  "$BIN/em-brief.sh" tst-s1 demo >/dev/null
+  expect_rc "spawn refuses an unfilled {TASK} brief" 1 "$BIN/em-spawn.sh" tst-s1 demo
+  fill_task tst-s1
+  expect_rc "spawn refuses a missing brief" 1 "$BIN/em-spawn.sh" tst-s9 demo
+  expect_rc "spawn refuses unverified harnesses (M4)" 1 "$BIN/em-spawn.sh" tst-s1 demo codex
+
+  expect "spawn succeeds with a filled brief" "$BIN/em-spawn.sh" tst-s1 demo
+  META="$EM_ROOT/state/tst-s1.meta"
+  expect "meta records mode=direct-PR" grep -qx 'mode=direct-PR' "$META"
+  expect "meta records kind=build" grep -qx 'kind=build' "$META"
+  expect "meta records the worktree path" grep -qx "worktree=$WT/tst-s1" "$META"
+  expect "status file pre-created" test -f "$EM_ROOT/state/tst-s1.status"
+  expect "turn-end Stop hook installed in the worktree" \
+    grep -q 'tst-s1.turn-ended' "$WT/tst-s1/.claude/settings.local.json"
+  expect "hook file excluded via the clone's info/exclude" \
+    grep -qxF '.claude/settings.local.json' "$EM_ROOT/projects/demo/.git/info/exclude"
+  expect "window em-tst-s1 exists" find_window tst-s1
+  expect "IC launched with the brief prompt" wait_for_pane tst-s1 FAKE_IC_READY
+  expect_rc "spawn refuses a duplicate task" 1 "$BIN/em-spawn.sh" tst-s1 demo
+
+  note "em-send.sh / em-peek.sh — against a plain shell window"
+  tmux_cmd new-window -d -t '=em:' -n em-tst-io -c "$SANDBOX" 'bash --norc -i' 2>/dev/null ||
+    tmux_cmd new-window -d -t '=em:' -n em-tst-io -c "$SANDBOX"
+  expect "send types a line and submits it" "$BIN/em-send.sh" tst-io 'echo pong-42'
+  expect "peek shows the pane output" wait_for_pane tst-io pong-42
+  expect "send --key delivers a key" "$BIN/em-send.sh" tst-io --key Enter
+  expect_rc "send to a missing window fails" 1 "$BIN/em-send.sh" tst-nope 'hi'
+  expect_rc "peek of a missing window fails" 1 "$BIN/em-peek.sh" tst-nope
+  expect_rc "peek validates the line count" 1 "$BIN/em-peek.sh" tst-io five
+
+  note "em-teardown.sh — refusal first, then clean offboarding"
+  echo dirt > "$WT/tst-s1/scratch.txt"
+  expect_rc "teardown REFUSES (3) while unlanded work exists" 3 "$BIN/em-teardown.sh" tst-s1
+  expect "refusal keeps the window alive" find_window tst-s1
+  expect "refusal keeps the meta record" test -f "$META"
+  rm "$WT/tst-s1/scratch.txt"
+  expect "teardown succeeds once the worktree is clean" "$BIN/em-teardown.sh" tst-s1
+  expect "worktree removed" test ! -e "$WT/tst-s1"
+  expect_rc "window killed" 1 find_window tst-s1
+  expect "volatile state cleared" test ! -e "$META"
+  expect "durable data/<id>/ kept" test -f "$BRIEF" # tst-b1 untouched
+  expect "brief of the torn-down task kept too" test -f "$EM_ROOT/data/tst-s1/brief.md"
+fi
+
+# ------------------------------------------------------------------ summary
+printf '\n%d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
+[ "$FAIL" -eq 0 ]
