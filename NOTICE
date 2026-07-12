@@ -1,0 +1,18 @@
+Engineering Manager for AI Agents
+Copyright (c) 2026 Shreyas Ponkshe
+
+This project is modeled on, and ports code from, firstmate
+(https://github.com/kunchenguid/firstmate), Copyright (c) 2026 Kun Chen,
+licensed under the MIT License.
+
+The bin/em-*.sh toolbelt scripts are adaptations of firstmate's fm-*.sh
+scripts (renamed fm-* -> em-*), with two exceptions that are original to
+this project by locked scoping decision (see PRD.md):
+
+  - bin/em-worktree.sh  replaces firstmate's "treehouse" worktree pool with
+    plain `git worktree` operations.
+  - bin/em-validate.sh  (arrives in milestone M3) replaces firstmate's
+    "no-mistakes" pipeline with a minimal test + lint gate.
+
+The MIT License applies to both the original and the ported code; see
+LICENSE for the full text.

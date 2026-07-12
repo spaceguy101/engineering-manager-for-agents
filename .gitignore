@@ -1,0 +1,8 @@
+# Personal/local state — never committed (PRD §4.2)
+data/
+state/
+projects/
+worktrees/
+config/
+
+.DS_Store
