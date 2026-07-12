@@ -109,6 +109,10 @@ expect "refused worktree is untouched" test -e "$WT/tst-a1/scratch.txt"
 expect "--force removes it anyway" "$BIN/em-worktree.sh" remove tst-a1 --force
 
 "$BIN/em-worktree.sh" add tst-a1 demo >/dev/null
+echo dirt > "$WT/tst-a1/junk.txt"
+expect "remove accepts --force before the id" "$BIN/em-worktree.sh" remove --force tst-a1
+
+"$BIN/em-worktree.sh" add tst-a1 demo >/dev/null
 (
   cd "$WT/tst-a1" &&
     git checkout -qb em/tst-a1 &&
@@ -154,6 +158,17 @@ git -C "$EM_ROOT/projects/loco" merge -q --ff-only em/tst-l1
 expect "removes once merged into local main" "$BIN/em-worktree.sh" remove tst-l1
 
 # ------------------------------------------------------------------- brief
+# The registry comes first: build briefs refuse unregistered projects.
+mkdir -p "$EM_ROOT/data"
+cat > "$EM_ROOT/data/projects.md" <<'REG'
+# Projects
+- demo [direct-PR] - throwaway test project (added 2026-07-12)
+- loco [local-only] - remote-less project (added 2026-07-12)
+- gp [gated +auto] - gated project (added 2026-07-12) | test: bash -c 'exit 0' | lint: echo lint-ok
+- gbad [gated] - failing gate (added 2026-07-12) | test: bash -c 'exit 1'
+- gnone [gated] - gated without commands (added 2026-07-12)
+REG
+
 note "em-brief.sh — template rendering"
 out="$("$BIN/em-brief.sh" tst-b1 demo)"
 BRIEF="$EM_ROOT/data/tst-b1/brief.md"
@@ -170,15 +185,6 @@ expect_rc "wants an existing clone" 1 "$BIN/em-brief.sh" tst-b3 nosuch
 
 # -------------------------------------------------- M3: registry and modes
 note "em-project-mode.sh — registry parsing"
-mkdir -p "$EM_ROOT/data"
-cat > "$EM_ROOT/data/projects.md" <<'REG'
-# Projects
-- demo [direct-PR] - throwaway test project (added 2026-07-12)
-- loco [local-only] - remote-less project (added 2026-07-12)
-- gp [gated +auto] - gated project (added 2026-07-12) | test: bash -c 'exit 0' | lint: echo lint-ok
-- gbad [gated] - failing gate (added 2026-07-12) | test: bash -c 'exit 1'
-- gnone [gated] - gated without commands (added 2026-07-12)
-REG
 expect "resolves mode" test "$("$BIN/em-project-mode.sh" demo)" = "direct-PR"
 expect "resolves local-only" test "$("$BIN/em-project-mode.sh" loco mode)" = "local-only"
 expect "resolves gated" test "$("$BIN/em-project-mode.sh" gp mode)" = "gated"
@@ -192,7 +198,7 @@ expect_rc "unknown project fails" 1 "$BIN/em-project-mode.sh" nosuch
 note "em-validate.sh — the test+lint gate"
 fake_meta() { # <id> <project>
   mkdir -p "$EM_ROOT/state"
-  printf 'window=em-%s\nworktree=%s\nproject=%s\nkind=build\n' \
+  printf 'window=em-%s\nworktree=%s\nproject=%s\nkind=build\nmode=direct-PR\n' \
     "$1" "$EM_ROOT/worktrees/$1" "$2" > "$EM_ROOT/state/$1.meta"
 }
 make_project gp
@@ -216,8 +222,8 @@ expect "local-only brief never opens a PR" test -z "$(grep 'gh pr create' "$EM_R
 expect "no-remote brief bases on the local branch" grep -q "detached at \`main\`" "$EM_ROOT/data/tst-b9/brief.md"
 expect_rc "gated project without gate commands cannot be briefed" 1 "$BIN/em-brief.sh" tst-b7 gnone
 make_project unreg
-expect "unregistered project falls back to direct-PR" "$BIN/em-brief.sh" tst-b6 unreg
-expect "fallback brief opens a PR" grep -q 'gh pr create' "$EM_ROOT/data/tst-b6/brief.md"
+expect_rc "unregistered project cannot take a build brief" 1 "$BIN/em-brief.sh" tst-b6 unreg
+expect "research briefs need only the clone" "$BIN/em-brief.sh" tst-b6 unreg --research
 
 note "em-review-diff.sh — branch vs authoritative base"
 "$BIN/em-worktree.sh" add tst-r1 demo >/dev/null && fake_meta tst-r1 demo
@@ -229,6 +235,7 @@ note "em-review-diff.sh — branch vs authoritative base"
 )
 expect "diff shows the branch change" grep -q 'review.txt' <("$BIN/em-review-diff.sh" tst-r1)
 expect "--stat summarizes" grep -q '1 file' <("$BIN/em-review-diff.sh" tst-r1 --stat)
+expect "--stat accepted before the id" grep -q '1 file' <("$BIN/em-review-diff.sh" --stat tst-r1)
 "$BIN/em-worktree.sh" add tst-r2 demo >/dev/null && fake_meta tst-r2 demo
 expect_rc "no branch yet fails plainly" 1 "$BIN/em-review-diff.sh" tst-r2
 
@@ -304,6 +311,41 @@ expect "symlinked working copies are fetch-only" grep -q 'symlinked' <("$BIN/em-
 rm "$EM_ROOT/projects/simu"
 rm -f "$EM_ROOT/state/"*.meta "$EM_ROOT/state/"*.check.sh # M3 fixtures: nothing in flight for the M2 cases
 
+note "em-status.sh — fleet overview"
+expect "reports an idle fleet" grep -q 'no tasks in flight' <("$BIN/em-status.sh" 2>/dev/null)
+fake_meta tst-st1 demo
+echo "working: poking around" >> "$EM_ROOT/state/tst-st1.status"
+meta_set tst-st1 pr https://github.com/o/r/pull/9
+out="$("$BIN/em-status.sh" 2>/dev/null)"
+expect "lists the task" grep -q 'tst-st1' <<< "$out"
+expect "shows kind/mode" grep -q 'build/direct-PR' <<< "$out"
+expect "shows the last status line" grep -q 'working: poking around' <<< "$out"
+expect "window reported dead" grep -q 'dead' <<< "$out"
+expect "shows the armed PR" grep -q 'pull/9' <<< "$out"
+rm -f "$EM_ROOT/state/tst-st1".*
+
+note "em-project-add.sh — registry add + validate"
+make_project padd
+out="$("$BIN/em-project-add.sh" padd --desc 'registry test project' --mode direct-PR)"
+expect "prints the registry line" grep -q '^- padd \[direct-PR\] - registry test project' <<< "$out"
+expect "line resolves via em-project-mode" test "$("$BIN/em-project-mode.sh" padd mode)" = "direct-PR"
+expect_rc "refuses a duplicate" 1 "$BIN/em-project-add.sh" padd --desc 'again'
+expect_rc "wants an existing clone" 1 "$BIN/em-project-add.sh" padd-nope --desc 'no clone'
+make_project padd2
+expect_rc "refuses ' | ' in a gate command" 1 "$BIN/em-project-add.sh" padd2 --desc x --test 'a | b'
+expect_rc "refuses an unknown mode" 1 "$BIN/em-project-add.sh" padd2 --desc x --mode yolo
+expect_rc "refuses an invalid name" 1 "$BIN/em-project-add.sh" 'bad name' --desc x
+expect "gated default with commands and +auto" \
+  "$BIN/em-project-add.sh" padd2 --desc 'gated project' --auto --test 'true' --lint 'echo ok'
+expect "auto flag recorded" test "$("$BIN/em-project-mode.sh" padd2 auto)" = "1"
+expect "test command round-trips" test "$("$BIN/em-project-mode.sh" padd2 test)" = "true"
+expect "--validate passes the registry" "$BIN/em-project-add.sh" --validate
+echo '- broken [nosuchmode] - bad line' >> "$EM_ROOT/data/projects.md"
+expect_rc "--validate flags a malformed line" 1 "$BIN/em-project-add.sh" --validate
+grep -v 'nosuchmode' "$EM_ROOT/data/projects.md" > "$EM_ROOT/data/projects.md.tmp" &&
+  mv "$EM_ROOT/data/projects.md.tmp" "$EM_ROOT/data/projects.md"
+expect "--validate green again after the fix" "$BIN/em-project-add.sh" --validate
+
 # --------------------------------------------------- M4: research and tools
 note "em-brief.sh --research — report-only contract"
 "$BIN/em-brief.sh" tst-x1 demo --research >/dev/null
@@ -354,6 +396,19 @@ note "em-bootstrap.sh — detect-and-report only"
 out="$("$BIN/em-bootstrap.sh" 2>&1)"
 expect "always exits 0" "$BIN/em-bootstrap.sh"
 expect "git present, not reported missing" test -z "$(grep 'missing: git' <<< "$out")"
+mkdir -p "$EM_ROOT/config"
+echo 'no-such-harness-zz9' > "$EM_ROOT/config/crew-harness"
+out="$("$BIN/em-bootstrap.sh" 2>&1)"
+expect "reports a missing IC harness" grep -q 'missing: no-such-harness-zz9' <<< "$out"
+rm -f "$EM_ROOT/config/crew-harness"
+out="$("$BIN/em-bootstrap.sh" 2>&1)"
+expect "flags an unregistered clone" grep -q 'registry: projects/unreg has no registry line' <<< "$out"
+expect "registered clones are not flagged" test -z "$(grep 'registry: projects/demo ' <<< "$out")"
+echo '- broken2 [nope] - bad line' >> "$EM_ROOT/data/projects.md"
+out="$("$BIN/em-bootstrap.sh" 2>&1)"
+expect "surfaces malformed registry lines" grep -q 'registry: ERROR' <<< "$out"
+grep -v 'broken2' "$EM_ROOT/data/projects.md" > "$EM_ROOT/data/projects.md.tmp" &&
+  mv "$EM_ROOT/data/projects.md.tmp" "$EM_ROOT/data/projects.md"
 
 # ------------------------------------------------------- M2: guard and lock
 note "em-guard.sh — beacon liveness warnings"
@@ -429,6 +484,7 @@ exec sleep 600
 EOF
   chmod +x "$SANDBOX/fakebin/claude"
   export EM_LAUNCH_OVERRIDE="$SANDBOX/fakebin/claude"
+  export EM_SPAWN_VERIFY=0 # keep spawns fast; the pane check has its own case below
 
   "$BIN/em-brief.sh" tst-s1 demo >/dev/null
   expect_rc "spawn refuses an unfilled {TASK} brief" 1 "$BIN/em-spawn.sh" tst-s1 demo
@@ -441,6 +497,7 @@ EOF
   META="$EM_ROOT/state/tst-s1.meta"
   expect "meta records mode=direct-PR" grep -qx 'mode=direct-PR' "$META"
   expect "meta records kind=build" grep -qx 'kind=build' "$META"
+  expect "meta records the launch command" grep -q '^launch=' "$META"
   expect "meta records the worktree path" grep -qx "worktree=$WT/tst-s1" "$META"
   expect "status file pre-created" test -f "$EM_ROOT/state/tst-s1.status"
   expect "turn-end Stop hook installed in the worktree" \
@@ -496,8 +553,39 @@ EOF
     env -u EM_LAUNCH_OVERRIDE "$BIN/em-spawn.sh" tst-x4 demo codex
   expect "meta records the harness" grep -qx 'harness=codex' "$EM_ROOT/state/tst-x4.meta"
   expect "non-claude spawn installs no claude hook" test ! -e "$WT/tst-x4/.claude"
-  "$BIN/em-teardown.sh" tst-x4 >/dev/null 2>&1
+  expect "teardown accepts --force before the id" "$BIN/em-teardown.sh" --force tst-x4
   rm -f "$EM_ROOT/config/verified-harnesses"
+
+  note "em-relaunch.sh — stuck-IC relaunch in place"
+  "$BIN/em-brief.sh" tst-rl1 demo >/dev/null
+  fill_task tst-rl1
+  "$BIN/em-spawn.sh" tst-rl1 demo >/dev/null 2>&1
+  expect "IC starts" wait_for_pane tst-rl1 FAKE_IC_READY
+  expect "status classifies a quiet pane idle" grep -q 'idle' <("$BIN/em-status.sh" 2>/dev/null)
+  expect "EM_BUSY_REGEX classifies a matching pane busy" \
+    grep -q 'busy' <(env EM_BUSY_REGEX='FAKE_IC_READY' "$BIN/em-status.sh" 2>/dev/null)
+  tmux_cmd kill-window -t "$(find_window tst-rl1)"
+  expect_rc "window really dead" 1 find_window tst-rl1
+  expect "relaunch recreates the window and replays the launch" \
+    "$BIN/em-relaunch.sh" tst-rl1 --note 'resumed after test kill'
+  expect "note appended to the brief" grep -q 'resumed after test kill' "$EM_ROOT/data/tst-rl1/brief.md"
+  expect "IC running again" wait_for_pane tst-rl1 FAKE_IC_READY
+  expect_rc "relaunch of an unknown task fails" 1 "$BIN/em-relaunch.sh" tst-zz
+  "$BIN/em-teardown.sh" tst-rl1 >/dev/null 2>&1
+
+  note "em-spawn.sh — post-launch pane check"
+  cat > "$SANDBOX/fakebin/trusty" <<'EOF'
+#!/usr/bin/env bash
+echo "Do you trust the files in this folder?"
+exec sleep 600
+EOF
+  chmod +x "$SANDBOX/fakebin/trusty"
+  "$BIN/em-brief.sh" tst-tv1 demo >/dev/null
+  fill_task tst-tv1
+  out="$(env EM_LAUNCH_OVERRIDE="$SANDBOX/fakebin/trusty" EM_SPAWN_VERIFY=3 \
+    "$BIN/em-spawn.sh" tst-tv1 demo 2>&1)"
+  expect "spawn-check flags a trust dialog" grep -q 'trust dialog' <<< "$out"
+  "$BIN/em-teardown.sh" tst-tv1 >/dev/null 2>&1
 fi
 
 # ------------------------------------------------------------------ summary

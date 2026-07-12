@@ -14,6 +14,9 @@
 #   require_id     validate a task id (kebab slug, e.g. fix-login-k3)
 #   window_name    canonical tmux window name for a task: em-<id>
 #   tmux_cmd       tmux, honoring EM_TMUX_SOCKET (test isolation seam)
+#   inside_tmux    running inside a usable tmux session
+#   create_task_window   new detached window for a task, in the current
+#                        session or the dedicated 'em' session
 #   find_window    print a tmux target for a task's window, in any session
 #   meta_path/meta_get/meta_set   accessors for state/<id>.meta (key=value)
 #   default_branch       resolve origin's default branch name for a clone
@@ -70,6 +73,26 @@ tmux_cmd() {
     command tmux -L "$EM_TMUX_SOCKET" "$@"
   else
     command tmux "$@"
+  fi
+}
+
+# Inside a usable tmux session? (The test socket seam never counts as inside:
+# $TMUX points at the real server, not the isolated test one.)
+inside_tmux() {
+  [ -n "${TMUX:-}" ] && [ -z "${EM_TMUX_SOCKET:-}" ]
+}
+
+# create_task_window <win> <dir> — new detached window named <win> starting
+# at <dir>, in the current session, or in a dedicated 'em' session when
+# running outside tmux.
+create_task_window() {
+  local win="$1" dir="$2"
+  if inside_tmux; then
+    tmux_cmd new-window -d -n "$win" -c "$dir"
+  else
+    tmux_cmd has-session -t '=em' 2>/dev/null ||
+      tmux_cmd new-session -d -s em -c "$EM_ROOT"
+    tmux_cmd new-window -d -t '=em:' -n "$win" -c "$dir"
   fi
 }
 

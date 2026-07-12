@@ -21,6 +21,11 @@
 # .git/info/exclude pattern) are sanctioned spawn provisioning (ADR-0003) —
 # harness mechanics, never project content.
 #
+# The launch command is recorded in the task's meta (launch=) so
+# em-relaunch.sh can replay it for a stuck IC. After launching, spawn looks
+# at the pane once (EM_SPAWN_VERIFY seconds later, default 5; 0 disables)
+# and prints a hint if a trust or bypass-permissions dialog is showing.
+#
 # Test seam: EM_LAUNCH_OVERRIDE replaces the harness launch command (the brief
 # prompt is still appended as the final argument). It doubles as the
 # raw-launch escape hatch for harness verification trials. Not
@@ -29,12 +34,6 @@ set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
 "$EM_BIN/em-guard.sh"
-
-# Inside a usable tmux session? (The test socket seam never counts as inside:
-# $TMUX points at the real server, not the isolated test one.)
-inside_tmux() {
-  [ -n "${TMUX:-}" ] && [ -z "${EM_TMUX_SOCKET:-}" ]
-}
 
 # install_turn_end_hook <worktree> <id> — ADR-0003 spawn provisioning: a Stop
 # hook that touches state/<id>.turn-ended, plus an idempotent exclude pattern
@@ -83,6 +82,27 @@ harness_verified() {
     grep -qx "$1" "$EM_CONFIG/verified-harnesses"
 }
 
+# verify_launch <id> <target> — EM_SPAWN_VERIFY seconds after launch
+# (default 5; 0 disables), look at the pane once and print a hint: a trust
+# or bypass-permissions dialog waiting to be accepted, or a reminder to peek.
+verify_launch() {
+  local id="$1" target="$2" secs="${EM_SPAWN_VERIFY:-5}" pane
+  case "$secs" in *[!0-9]* | '') secs=5 ;; esac
+  if [ "$secs" -eq 0 ]; then
+    log "peek within ~20s (em-peek.sh $id) to confirm the IC is processing and accept any trust dialog"
+    return 0
+  fi
+  sleep "$secs"
+  pane="$(tmux_cmd capture-pane -p -t "$target" 2>/dev/null || true)"
+  if printf '%s\n' "$pane" | grep -qi 'trust the files'; then
+    log "spawn-check: trust dialog showing — accept it: em-send.sh $id --key Enter"
+  elif printf '%s\n' "$pane" | grep -qiE 'bypass ?permissions'; then
+    log "spawn-check: bypass-permissions dialog showing (defaults to \"No, exit\") — accept it: em-send.sh $id --key Down, then em-send.sh $id --key Enter"
+  else
+    log "spawn-check: no dialog detected ${secs}s in — confirm progress with em-peek.sh $id"
+  fi
+}
+
 main() {
   local id="" repo="" harness="" kind=build arg
   for arg in "$@"; do
@@ -120,7 +140,11 @@ main() {
 
   local mode auto
   if ! mode="$("$EM_BIN/em-project-mode.sh" "$repo" mode 2>/dev/null)"; then
-    mode=direct-PR
+    # Research worktrees are scratch — no delivery mode to resolve. Build
+    # tasks never guess one.
+    [ "$kind" = "research" ] ||
+      die "project '$repo' is not in the registry — register it first (em-project-add.sh); delivery modes are Director-confirmed, never guessed"
+    mode="-"
   fi
   auto="$("$EM_BIN/em-project-mode.sh" "$repo" auto 2>/dev/null || printf '0')"
 
@@ -133,10 +157,15 @@ main() {
     install_turn_end_hook "$wt" "$id"
   fi
 
+  local win prompt launch
+  win="$(window_name "$id")"
+  prompt="You are an IC agent. Read your brief at $brief and execute it. Work only in this directory."
+  launch="${EM_LAUNCH_OVERRIDE:-$(harness_cmd "$harness")} \"$prompt\""
+
   mkdir -p "$EM_STATE"
   : > "$EM_STATE/$id.status"
   cat > "$(meta_path "$id")" <<EOF
-window=$(window_name "$id")
+window=$win
 worktree=$wt
 project=$repo
 harness=$harness
@@ -144,27 +173,18 @@ kind=$kind
 mode=$mode
 auto=$auto
 pr=
+launch=$launch
 spawned=$(date +%Y-%m-%dT%H:%M:%S)
 EOF
 
-  local win
-  win="$(window_name "$id")"
-  if inside_tmux; then
-    tmux_cmd new-window -d -n "$win" -c "$wt"
-  else
-    tmux_cmd has-session -t '=em' 2>/dev/null ||
-      tmux_cmd new-session -d -s em -c "$EM_ROOT"
-    tmux_cmd new-window -d -t '=em:' -n "$win" -c "$wt"
-  fi
-
-  local target prompt launch
+  create_task_window "$win" "$wt"
+  local target
   target="$(find_window "$id")" || die "window $win vanished after creation"
-  prompt="You are an IC agent. Read your brief at $brief and execute it. Work only in this directory."
-  launch="${EM_LAUNCH_OVERRIDE:-$(harness_cmd "$harness")} \"$prompt\""
   tmux_cmd send-keys -t "$target" -l -- "$launch"
   tmux_cmd send-keys -t "$target" Enter
 
-  log "spawned $id in window $win — peek within ~20s (em-peek.sh $id) to confirm it is processing and accept any trust dialog"
+  log "spawned $id in window $win"
+  verify_launch "$id" "$target"
   printf '%s\n' "$wt"
 }
 

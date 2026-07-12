@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # em-bootstrap.sh — session-start detection: report missing toolchain pieces
-# (one line each, with the exact install command), GitHub auth state, and a
-# harness override if configured; then run a bounded best-effort fleet sync.
+# (one line each, with the exact install command), GitHub auth state, a
+# harness override if configured, and registry drift (clones without a
+# registry line, malformed registry lines); then run a bounded best-effort
+# fleet sync.
 #
 # Usage:
 #   em-bootstrap.sh
@@ -50,6 +52,34 @@ main() {
 
   if [ -f "$EM_CONFIG/crew-harness" ]; then
     printf 'harness-override: %s\n' "$(head -n1 "$EM_CONFIG/crew-harness" | tr -d '[:space:]')"
+  fi
+
+  # The harness new ICs would launch on must exist on this machine —
+  # otherwise the failure surfaces mid-dispatch instead of here.
+  local ic_harness
+  ic_harness="$("$EM_BIN/em-harness.sh" resolve 2>/dev/null || printf 'claude')"
+  command -v "$ic_harness" >/dev/null ||
+    printf 'missing: %s (the IC harness new tasks launch on) — install it or change config/crew-harness\n' "$ic_harness"
+
+  # Registry drift: every clone needs a registry line (an unregistered
+  # project cannot take build tasks — delivery modes are Director-confirmed,
+  # never guessed), and existing lines must parse. Rebuilding a lost
+  # registry means re-registering each project with the Director.
+  local reg="$EM_DATA/projects.md" d name
+  if [ -d "$EM_PROJECTS" ]; then
+    for d in "$EM_PROJECTS"/*/; do
+      [ -e "$d" ] || continue
+      name="$(basename "$d")"
+      [ -d "$EM_PROJECTS/$name/.git" ] || continue
+      if [ ! -f "$reg" ] ||
+        ! awk -v n="- $name [" 'index($0, n) == 1 { found = 1 } END { exit !found }' "$reg"; then
+        printf 'registry: projects/%s has no registry line — re-register it: em-project-add.sh %s --desc "…"\n' "$name" "$name"
+      fi
+    done
+  fi
+  if [ -f "$reg" ]; then
+    "$EM_BIN/em-project-add.sh" --validate 2>&1 >/dev/null |
+      grep -v 'registry OK' | sed 's/^/registry: /' || true
   fi
 
   # Bounded, best-effort fleet sync; only abnormal lines surface.

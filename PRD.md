@@ -1,6 +1,6 @@
 # PRD: Engineering Manager for AI Agents
 
-**Status:** Draft v0.3
+**Status:** v0.4 — v1 shipped; this spec is kept reconciled with the implementation
 **Inspiration:** [firstmate](https://github.com/kunchenguid/firstmate) — we aim for functional parity with that project, reframed around an "Engineering Manager" metaphor.
 
 **Key scoping decisions (locked):**
@@ -121,7 +121,7 @@ Detect → consent → install. Never install anything without this-session appr
 - Run `bin/em-bootstrap.sh`. It detects missing toolchain pieces (tmux, git ≥ 2.5 for worktree support, `gh` CLI, and any ported helper tools) and prints one line per problem with the exact install command; the EM lists them with a one-line purpose each, waits for consent, then installs only the approved set. Note the toolchain is deliberately small: worktree management is plain `git worktree` (no external pool tool) and the `gated` validation is our own built-in script — nothing external to install for it.
 - Bootstrap also runs a bounded, best-effort fleet sync (fetch clones, clean fast-forward default branches, prune gone branches; timeout-guarded, non-fatal; pruning disable-able via env var).
 - Handles: `NEEDS_GH_AUTH` (ask the Director to run `gh auth login` interactively), harness override lines (record silently), fleet-sync skips (investigate only if blocking).
-- Then load `data/projects.md` (rebuild from clones if missing/stale) and `data/director.md` (preferences).
+- Then load `data/projects.md` and `data/director.md` (preferences). Bootstrap flags registry drift as `registry:` problem lines — clones with no registry line, malformed or duplicate lines (`em-project-add.sh --validate` is the underlying lint). A drifted or lost registry is rebuilt by re-registering each project with the Director via `em-project-add.sh` — delivery modes and gate commands are Director-confirmed and are never guessed or reconstructed automatically. Until a project is registered it cannot take build tasks (`em-brief.sh` refuses; research tasks need only the clone).
 - No work is dispatched until required tools and GitHub auth are good. Silence means all good.
 
 ### 4.4 Recovery (every session start, after bootstrap)
@@ -142,13 +142,13 @@ A restart must be a non-event; conversation memory is a cache, disk + tmux are t
 
 - ICs default to the same harness the EM runs on; the Director can override globally (`config/crew-harness`) or per task ("run this one on codex").
 - Each adapter = mechanics (launch command, autonomy flag, turn-end hook — lives in `em-spawn.sh`) + supervision knowledge (busy-pane regex, exit command, interrupt key, trust-dialog quirks — documented in the orchestrator file).
-- Launch targets at parity: **claude, codex, opencode, pi**, each empirically verified, including per-harness quirks (trust dialogs to auto-accept, resume commands, auto-upgrade flakiness, interrupt semantics).
+- Launch commands are recorded for **claude, codex, opencode, pi**; only claude ships verified. The other three are recorded-but-unverified starting points gated behind the per-machine verification trial below — they cannot dispatch until verified, and their quirks (trust dialogs to auto-accept, resume commands, auto-upgrade flakiness, interrupt semantics) are documented as each is verified.
 - **Never dispatch on an unverified adapter.** New harnesses are verified via a supervised trivial trial task using a raw-launch escape hatch, then their mechanics/knowledge get recorded and committed.
 - `bin/em-harness.sh` detects the current harness (env markers, then process ancestry) and resolves the effective IC harness.
 
 ### 4.6 Project management
 
-- All projects live flat under `projects/`. `data/projects.md` holds one registry line per project: `- <name> [<mode>] - <description> (added <date>)`, with optional `+auto`. It stays a thin navigation registry, never a knowledge dump.
+- All projects live flat under `projects/`. `data/projects.md` holds one registry line per project: `- <name> [<mode>] - <description> (added <date>)`, with optional `+auto`. It stays a thin navigation registry, never a knowledge dump. Registration goes through `em-project-add.sh` (validated fields; refuses the `" | "` field delimiter inside values; `--validate` lints the whole registry). A project absent from the registry cannot take build tasks — `em-brief.sh` refuses rather than guessing a delivery mode; research briefs need only the clone.
 - **Project memory ownership:** durable project-intrinsic knowledge (build/test/release mechanics, conventions, sharp edges) lives in the project's committed `AGENTS.md` (`CLAUDE.md` symlinked), created lazily on first need and written **only by ICs** through the delivery pipeline (`bin/em-ensure-agents-md.sh` supports this). Fleet/Director-private knowledge (modes, autonomy posture, strategy, in-flight state) stays in the EM's `data/`.
 - **Delivery modes** (chosen at add time; default `gated`; faster modes / `+auto` only on explicit Director say-so):
   - `gated` (default) — the IC must pass the project's **test + lint gate** before pushing: `bin/em-validate.sh` runs the project's configured test and lint commands inside the IC's worktree and exits non-zero on any failure. Only after a green gate does the IC push and open the PR, reporting `done: PR <url> gate green`. That is the whole pipeline — no structured review findings, risk labels, or evidence trails.
@@ -168,7 +168,7 @@ A restart must be a non-event; conversation memory is a cache, disk + tmux are t
 
 **Brief.** Scaffold with `bin/em-brief.sh <id> <repo> [--research]`. The scaffold is the contract: branch setup, sparse status-reporting protocol (append only supervisor-actionable phase changes and `needs-decision` / `blocked` / `done` / `failed` — every append wakes the EM), delivery rules resolved from the project's mode, definition of done, and (build tasks only) the project-memory contract. The EM fills in `{TASK}` with description, acceptance criteria, and constraints.
 
-**Spawn.** `bin/em-spawn.sh <id> projects/<repo> [harness|--research]` creates the tmux window (in the current session, or a dedicated `em` session when outside tmux), creates a fresh git worktree for the task (`git worktree add`, detached at the fetched default branch), installs the turn-end hook, writes `state/<id>.meta`, and launches the IC with its brief. Worktrees start detached on a clean default branch; build briefs have the IC create branch `em/<id>`, research worktrees stay scratch. After spawn, peek within ~20s to confirm processing and auto-accept any trust dialog. Add to backlog "In flight".
+**Spawn.** `bin/em-spawn.sh <id> projects/<repo> [harness|--research]` creates the tmux window (in the current session, or a dedicated `em` session when outside tmux), creates a fresh git worktree for the task (`git worktree add`, detached at the fetched default branch), installs the turn-end hook, writes `state/<id>.meta`, and launches the IC with its brief. Worktrees start detached on a clean default branch; build briefs have the IC create branch `em/<id>`, research worktrees stay scratch. Spawn re-inspects the pane after ~`EM_SPAWN_VERIFY` seconds and prints a hint if a trust/bypass dialog is waiting; still peek within ~20s to confirm processing. Add to backlog "In flight".
 
 **Supervise.** See 4.8. Steering happens only via short single lines through `bin/em-send.sh`; anything long goes in a file the IC can read.
 
@@ -187,14 +187,14 @@ A restart must be a non-event; conversation memory is a cache, disk + tmux are t
 ### 4.8 Supervision protocol
 
 - **The watcher is the backbone.** Whenever ≥1 task is in flight, `bin/em-watch.sh` runs in the background at zero token cost and exits with exactly one reason line: `signal | stale | check | heartbeat`. Restart it after handling every wake and before ending any turn. Waiting is intentionally silent — no idle progress updates.
-- **Wake handling, cheapest first:** `signal` → read the listed status files (each ~30 tokens, usually sufficient; wakes coalesce signals within a grace window). `stale` → IC stopped without reporting; peek the pane (`bin/em-peek.sh`, default 40-line bounded tail). `check` → a per-task slow poll fired (usually PR merged); act. `heartbeat` → mandatory full-fleet review: skim status files, peek panes that look off, check PR-ready tasks, reconcile the backlog, restart the watcher. Unchanged heartbeats are internal — never reported.
+- **Wake handling, cheapest first:** `signal` → read the listed status files (each ~30 tokens, usually sufficient; wakes coalesce signals within a grace window). `stale` → IC stopped without reporting; peek the pane (`bin/em-peek.sh`, default 40-line bounded tail). `check` → a per-task slow poll fired (usually PR merged); act. `heartbeat` → mandatory full-fleet review: start from `em-status.sh` (one line per task, panes classified busy/idle/dead via `EM_BUSY_REGEX`), skim status files, peek panes that look off, check PR-ready tasks, reconcile the backlog, restart the watcher. Unchanged heartbeats are internal — never reported.
 - **Heartbeat backoff:** base interval (default 600s) doubling to a cap (default 2h) while heartbeats are the only wakes; any signal/stale/check resets the cadence. Due per-task checks run before signal scanning so chatty ICs can't starve merge detection.
 - **Liveness is guarded, not just disciplined:** the watcher touches a beacon file every poll; every supervision script calls `bin/em-guard.sh` first, which warns via stderr when tasks are in flight but the beacon is stale/missing (grace window keeps normal restart gaps silent). A guard warning means: restart the watcher before anything else.
 - **Never foreground-block while tasks are in flight** (own pipelines, long builds) — background such work so wakes can interleave.
 - **Custom check contract:** `state/<id>.check.sh` prints one line only when the EM should wake, nothing otherwise, and finishes within the check timeout.
 - **Token discipline:** status files before panes; bounded peeks; never stream a pane through the EM; batch Director updates. tmux is ground truth — hooks and status files alone are never trusted over the mandatory heartbeat review.
 
-**Stuck-IC playbook (escalate in order):** (1) peek the pane; (2) waiting on a question the brief answers → answer in one line; (3) confused/looping → interrupt with the adapter's interrupt key + one corrective line; (4) context-exhausted/wedged → exit and relaunch with the same brief plus an appended progress note (worktree and commits persist; cheap); (5) second relaunch fails → mark `failed` in the backlog and tell the Director with evidence.
+**Stuck-IC playbook (escalate in order):** (1) peek the pane; (2) waiting on a question the brief answers → answer in one line; (3) confused/looping → interrupt with the adapter's interrupt key + one corrective line; (4) context-exhausted/wedged → exit and relaunch with the same brief plus an appended progress note (`em-relaunch.sh`; worktree and commits persist; cheap); (5) second relaunch fails → mark `failed` in the backlog and tell the Director with evidence.
 
 ### 4.9 Escalation and Director etiquette
 
@@ -231,13 +231,16 @@ Queued is re-evaluated on every teardown and heartbeat; Done keeps only the 10 m
 | `em-guard.sh` | Warn when tasks are in flight but the watcher beacon is stale/missing |
 | `em-worktree.sh` | Thin wrapper over `git worktree add / remove / prune` with our naming and safety conventions (replaces treehouse) |
 | `em-validate.sh` | The gate: run the project's configured test + lint commands in the task worktree; non-zero on any failure (replaces no-mistakes) |
-| `em-spawn.sh` | Window → fresh `git worktree` → agent launched with its brief; records task kind/mode |
+| `em-spawn.sh` | Window → fresh `git worktree` → agent launched with its brief; records task kind/mode and the launch command; post-launch pane check for trust dialogs |
+| `em-relaunch.sh` | Replay a stuck task's recorded launch command in its existing window + worktree, optionally appending a progress note to the brief |
 | `em-project-mode.sh` | Resolve a project's delivery mode and `+auto` flag from the registry |
+| `em-project-add.sh` | Add a validated project registry line; `--validate` lints the registry |
 | `em-merge-local.sh` | Approved fast-forward merge of a `local-only` project's local default branch |
 | `em-review-diff.sh` | Review an IC branch against the authoritative base (optional `--stat`) |
 | `em-watch.sh` | Block until supervision work is due; exit with one reason line |
 | `em-send.sh` | Send one literal line (or a key, e.g. `--key Escape`) to an IC window |
 | `em-peek.sh` | Print a bounded tail of an IC pane |
+| `em-status.sh` | One-line-per-task fleet overview: project, kind/mode, pane busy/idle/dead (via `EM_BUSY_REGEX`), last status, armed PR |
 | `em-pr-check.sh` | Record a PR-ready task and arm the watcher's merge poll |
 | `em-promote.sh` | Promote a research task in place into a protected build task |
 | `em-teardown.sh` | Return the worktree, kill the window; protects unlanded work; requires research reports |
@@ -246,13 +249,13 @@ Queued is re-evaluated on every teardown and heartbeat; Done keeps only the 10 m
 
 All scripts: bash, shellcheck-clean (CI-enforced), each self-documenting via a header.
 
-**Porting strategy:** every script above except `em-worktree.sh` and `em-validate.sh` (our two new pieces) is a direct port of its firstmate counterpart (`fm-*` → `em-*`), with treehouse calls swapped for `em-worktree.sh` / raw `git worktree` and no-mistakes hooks replaced by `em-validate.sh` calls in the brief scaffold and mode resolution. Preserve firstmate's MIT attribution in the LICENSE/NOTICE for ported code.
+**Porting strategy:** every script above except `em-worktree.sh` and `em-validate.sh` (our two replacement pieces) and the post-v1 additions `em-status.sh`, `em-relaunch.sh`, and `em-project-add.sh` (ours outright) is a direct port of its firstmate counterpart (`fm-*` → `em-*`), with treehouse calls swapped for `em-worktree.sh` / raw `git worktree` and no-mistakes hooks replaced by `em-validate.sh` calls in the brief scaffold and mode resolution. Preserve firstmate's MIT attribution in the LICENSE/NOTICE for ported code.
 
 ### 4.12 Configuration
 
 - Orchestrator behavior lives in `AGENTS.md` (edit like any prompt when the fleet is empty; delegate to an IC while tasks are in flight).
 - Director-personal preferences in `data/director.md` (gitignored; read after the project registry at bootstrap; canonical over any harness memory).
-- Runtime tuning via environment variables (defaults): `EM_POLL=15`, `EM_HEARTBEAT=600` (exponential backoff), `EM_HEARTBEAT_MAX=7200`, `EM_CHECK_INTERVAL=300`, `EM_CHECK_TIMEOUT=30`, `EM_GUARD_GRACE=300`, `EM_SIGNAL_GRACE=30`, `EM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=20`, `EM_FLEET_PRUNE=1`, `EM_BUSY_REGEX` (extendable per harness).
+- Runtime tuning via environment variables (defaults): `EM_POLL=15`, `EM_HEARTBEAT=600` (exponential backoff), `EM_HEARTBEAT_MAX=7200`, `EM_CHECK_INTERVAL=300`, `EM_CHECK_TIMEOUT=30`, `EM_GUARD_GRACE=300`, `EM_SIGNAL_GRACE=30`, `EM_FLEET_SYNC_BOOTSTRAP_TIMEOUT=20`, `EM_FLEET_PRUNE=1`, `EM_SPAWN_VERIFY=5` (post-launch pane check; 0 disables), `EM_BUSY_REGEX` (busy-pane classifier used by `em-status.sh`; default `esc to interrupt`, extendable per harness).
 
 ### 4.13 Persona and tone
 
@@ -276,7 +279,7 @@ The EM addresses the user with light "engineering org" flavor (e.g., occasional 
 - N parallel tasks on the same repo complete without worktree/branch collisions.
 - Idle fleet consumes zero tokens between wakes; an EM kill + relaunch mid-flight loses no work and requires no Director re-explanation.
 - Zero incidents of the EM writing to a project outside the sanctioned exceptions, merging without approval, or destroying unlanded work (script-enforced, not just prompt-enforced).
-- All four launch harnesses verified end-to-end on a trivial task.
+- claude verified end-to-end out of the box; each additional harness (codex/opencode/pi) has a script-supported verification path (supervised trial via the raw-launch escape hatch) and dispatches only once verified on the machine.
 
 ## 7. Milestones (build order, later)
 

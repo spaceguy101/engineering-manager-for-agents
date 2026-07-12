@@ -12,11 +12,20 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
 "$EM_BIN/em-guard.sh"
 
 main() {
-  local id="${1:-}" stat="${2:-}"
-  case "$id" in -h | --help) usage; exit 0 ;; esac
+  local id="" stat="" arg
+  for arg in "$@"; do
+    case "$arg" in
+      -h | --help) usage; exit 0 ;;
+      --stat) stat="--stat" ;;
+      -*) die "unknown option '$arg' (only --stat)" ;;
+      *)
+        [ -z "$id" ] || { usage >&2; exit 1; }
+        id="$arg"
+        ;;
+    esac
+  done
   [ -n "$id" ] || { usage >&2; exit 1; }
   require_id "$id"
-  [ -z "$stat" ] || [ "$stat" = "--stat" ] || die "unknown option '$stat' (only --stat)"
 
   local project proj branch base
   project="$(meta_get "$id" project)" || die "no meta record for task $id"

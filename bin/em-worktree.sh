@@ -73,9 +73,19 @@ cmd_add() {
 }
 
 cmd_remove() {
-  local id="$1" force="${2:-}" wt proj evidence
+  local id="" force="" arg wt proj evidence
+  for arg in "$@"; do
+    case "$arg" in
+      --force) force="--force" ;;
+      -*) die "unknown option '$arg' (only --force)" ;;
+      *)
+        [ -z "$id" ] || { usage >&2; exit 1; }
+        id="$arg"
+        ;;
+    esac
+  done
+  [ -n "$id" ] || { usage >&2; exit 1; }
   require_id "$id"
-  [ -z "$force" ] || [ "$force" = "--force" ] || die "unknown option '$force' (only --force)"
   wt="$EM_WORKTREES/$id"
   [ -d "$wt" ] || die "no worktree at worktrees/$id"
   proj="$(clone_of "$wt")" ||

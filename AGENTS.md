@@ -53,14 +53,19 @@ PR, never straight to main.
    wait for consent, and install **only the approved set** — never install
    anything without this-session approval. `NEEDS_GH_AUTH` → ask the
    Director to run `gh auth login` interactively. `harness-override:` lines
-   are recorded silently. Fleet-sync skips are informational — investigate
-   only if they block a task. Dispatch nothing until tools and GitHub auth
-   are good.
+   are recorded silently. `registry:` lines mean the clones and the project
+   registry have drifted (a clone with no registry line, or a malformed
+   line) — re-register with the Director via `bin/em-project-add.sh`; until
+   then that project cannot take build tasks. Fleet-sync skips are
+   informational — investigate only if they block a task. Dispatch nothing
+   until tools and GitHub auth are good.
 2. Read `data/backlog.md` and `data/director.md` if they exist.
 3. **Recover** — you may have been killed mid-flight; reconcile reality with
    records before doing anything:
-   - List live task windows (`tmux list-windows -a` filtered to `em-*`) and
-     read every `state/*.meta` and `state/*.status`.
+   - Run `bin/em-status.sh` for the one-line-per-task overview (project,
+     kind/mode, window liveness, last status), then list live task windows
+     (`tmux list-windows -a` filtered to `em-*`) to catch orphans and read
+     any `state/<id>.status` that needs more than its last line.
    - Orphan window (no meta): peek it, identify it, ask the Director only if
      unclear. Dead IC (meta, no window): check the worktree
      (`git -C worktrees/<id> status`, read-only) — salvage by relaunching in
@@ -102,7 +107,17 @@ knowledge dump:
   (`ln -s <path> projects/<name>` — fleet sync will never fast-forward or
   prune a symlinked working copy). Creating a *new* GitHub repo is
   outward-facing: propose name/owner/visibility (default private) and create
-  only on the Director's word. Then add the registry line.
+  only on the Director's word. Then register it:
+  `bin/em-project-add.sh <name> --desc "<one line>" [--mode <mode>] [--auto]
+  [--test "<cmd>"] [--lint "<cmd>"]` — it refuses malformed values, and
+  `bin/em-project-add.sh --validate` lints the whole registry. Registry
+  values must not contain ` | ` (the field delimiter): wrap a piped gate
+  command in a script inside the project instead.
+- A project not in the registry cannot take build tasks — `em-brief.sh`
+  refuses rather than guessing a delivery mode (research briefs need only
+  the clone). If the registry is ever lost, bootstrap flags every clone;
+  rebuild by re-registering each project with the Director — modes and gate
+  commands are confirmed, never guessed.
 - **Modes** (chosen at add time; default `gated`; faster modes only on
   explicit Director say-so):
   - `gated` — the IC must get `bin/em-validate.sh <id>` green (the project's
@@ -151,10 +166,11 @@ entries — PRs, local main, and report files are the durable record.
    criteria, constraints, and any context the IC can't discover itself.
    The rest of the scaffold (branch, status protocol, delivery) is the
    contract — don't weaken it.
-2. **Spawn.** `bin/em-spawn.sh <id> <repo> [<harness>] [--research]`.
-   Within ~20s, `bin/em-peek.sh <id>` to confirm the IC is processing; if a
-   trust dialog is showing, accept it (see harness notes). Add the task to
-   the backlog.
+2. **Spawn.** `bin/em-spawn.sh <id> <repo> [<harness>] [--research]`. Spawn
+   checks the pane ~5s after launch and prints a hint if a trust or
+   bypass-permissions dialog is waiting — act on it (see harness notes).
+   Still `bin/em-peek.sh <id>` within ~20s to confirm the IC is processing.
+   Add the task to the backlog.
 3. **Supervise via the watcher** (see the supervision protocol below —
    the watcher wakes you; between wakes you do and say nothing about
    in-flight work). Steer with one short line via `bin/em-send.sh <id>
@@ -216,10 +232,11 @@ Handle wakes cheapest-first:
   (`bin/em-peek.sh <id>`) and apply the stuck-IC playbook.
 - `check <id>: <note>` — a per-task poll fired (e.g. "PR merged"). Act on it
   (post-merge: teardown, backlog, dispatch unblocked work).
-- `heartbeat` — mandatory full-fleet review: skim every status file, peek
-  any pane that looks off, check PR-ready tasks, reconcile the backlog,
-  re-evaluate queued work, then restart the watcher. An unchanged heartbeat
-  is internal — never reported to the Director.
+- `heartbeat` — mandatory full-fleet review: start with `bin/em-status.sh`
+  (one line per task: window liveness + last status), read any status file
+  or peek any pane that looks off, check PR-ready tasks, reconcile the
+  backlog, re-evaluate queued work, then restart the watcher. An unchanged
+  heartbeat is internal — never reported to the Director.
 - `idle` — nothing in flight; don't restart the watcher until the next
   dispatch.
 
@@ -236,11 +253,11 @@ trusted over the heartbeat's own look at the panes.
 2. Waiting on a question the brief answers → answer in one line (`em-send`).
 3. Confused or looping → interrupt (`em-send <id> --key Escape`), then one
    corrective line.
-4. Wedged or context-exhausted → have it exit, then relaunch: same brief plus
-   an appended progress note (the worktree and commits persist, this is
-   cheap). Kill the window, `em-teardown.sh` will refuse on unlanded work —
-   instead just relaunch the harness in the existing window/worktree by
-   sending the same launch command `em-spawn.sh` used.
+4. Wedged or context-exhausted → have it exit (interrupt first if needed),
+   then `bin/em-relaunch.sh <id> --note "<one-line progress note>"` — it
+   appends the note to the brief and replays the spawn launch command in the
+   existing window and worktree (commits persist; this is cheap). Never tear
+   down just to relaunch.
 5. A second relaunch fails → mark `failed` in the backlog, tell the Director
    with evidence (last status lines + a bounded peek).
 
@@ -269,6 +286,9 @@ lean on heartbeats and peeks for them.
 
 - Busy pane: a working claude shows a spinner and `esc to interrupt`. A pane
   showing the input box `>` with no spinner is idle/waiting.
+  `bin/em-status.sh` classifies panes busy/idle by this indicator
+  (`EM_BUSY_REGEX`, default `esc to interrupt` — extend it when verifying
+  other harnesses).
 - Interrupt: `Escape` (via `em-send <id> --key Escape`).
 - Trust dialog: first launch in a new directory may ask "Do you trust the
   files in this folder?" — select trust (`em-send <id> --key Enter`).

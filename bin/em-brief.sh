@@ -8,8 +8,10 @@
 #
 # Build: renders templates/brief-build.md to data/<id>/brief.md, splicing in
 # the delivery section for the project's mode (templates/delivery-<mode>.md).
-# A project missing from the registry defaults to direct-PR with a warning;
-# a gated project without confirmed gate commands cannot be briefed.
+# A project missing from the registry cannot take a build brief — delivery
+# modes are Director-confirmed, never guessed; register it first
+# (em-project-add.sh). A gated project without confirmed gate commands
+# cannot be briefed either. Research briefs need only the clone.
 # Research: renders templates/brief-research.md — deliverable is
 # data/<id>/report.md, never a PR; no mode resolution.
 # The {TASK} placeholder is left for the EM to fill in (description,
@@ -54,10 +56,8 @@ main() {
   local dtpl=""
   if [ "$research" -eq 0 ]; then
     local mode
-    if ! mode="$("$EM_BIN/em-project-mode.sh" "$repo" mode 2>/dev/null)"; then
-      warn "project '$repo' is not in the registry — defaulting to direct-PR (record it in data/projects.md)"
-      mode=direct-PR
-    fi
+    mode="$("$EM_BIN/em-project-mode.sh" "$repo" mode 2>/dev/null)" ||
+      die "project '$repo' is not in the registry — register it first (em-project-add.sh $repo --desc \"…\"); delivery modes are Director-confirmed, never guessed"
     dtpl="$EM_TEMPLATES/delivery-$mode.md"
     [ -f "$dtpl" ] || die "unknown delivery mode '$mode' for '$repo' (no $dtpl)"
     if [ "$mode" = "gated" ]; then
