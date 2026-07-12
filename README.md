@@ -72,24 +72,37 @@ repositories into `projects/` (the EM can do this for you).
 - **Harnesses** — Claude Code verified out of the box; codex/opencode/pi
   dispatch only after a supervised per-machine verification trial.
 
-See [PRD.md](PRD.md) for the full specification and [docs/adr/](docs/adr/)
-for design decisions.
-
 ## Repository layout
 
 ```
 AGENTS.md      the EM's instructions (CLAUDE.md symlinks to it)
 bin/           the toolbelt the EM drives
 templates/     IC brief scaffolds
-docs/          glossary + architecture decision records
 tests/         pure-bash test suite
 data/, state/, projects/, worktrees/, config/   local, gitignored
 ```
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) — note that an agent launched in this
-repo becomes the EM, so repo development has its own workflow.
+Note that a coding agent launched in this repo boots as the EM by default, so
+developing the repo itself is a distinct mode of work. When your task is to
+modify the system (the `bin/` toolbelt, `AGENTS.md`, templates, CI), a few
+conventions apply:
+
+- **Toolbelt:** 100% bash, macOS + Linux. Every script uses
+  `#!/usr/bin/env bash`, `set -euo pipefail`, and a header comment that
+  doubles as its `--help` text. Scripts are **shellcheck-clean**, enforced by
+  CI (`.github/workflows/ci.yml`). Shared helpers live in `bin/lib/common.sh`.
+  Exit code **3** always means a safety refusal — stop and investigate, never
+  retry with `--force` on your own initiative.
+- **Tests:** `bash tests/run.sh` — pure bash, no framework. tmux-dependent
+  cases run on an isolated server and skip (not fail) when tmux is missing.
+  Every safety-refusal path has a test; the unlanded-work checks are the
+  flagship suite.
+- **Shared material** (the orchestrator, `bin/`, templates, README) ships
+  behind its own gate: feature branch → shellcheck + tests green → PR →
+  merge. The invariants in `AGENTS.md` are script-enforced; every change must
+  preserve them.
 
 ## License
 
