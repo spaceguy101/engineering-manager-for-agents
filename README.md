@@ -41,13 +41,22 @@ repositories into `projects/` (the EM can do this for you).
 
 ## Status
 
-**Milestone 1 (dispatch slice)** is implemented: the EM can take a build task,
-brief and spawn a Claude Code IC, supervise it by peeking at its window, and
-the IC delivers by pushing a branch and opening a PR (`direct-PR` mode). The
-flow deliberately stops at "PR is open" — merge detection, the zero-token
-background watcher, gated (test+lint) delivery, local-only merges, research
-tasks, and additional harnesses arrive in M2–M4. See [PRD.md](PRD.md) for the
-full specification and [docs/adr/](docs/adr/) for design decisions.
+**v1 is feature-complete** (all four PRD milestones):
+
+- **Dispatch** — brief → isolated worktree + tmux window → IC works → ships.
+- **Supervision** — a zero-token background watcher wakes the EM on status
+  signals, silent stalls, merge events, and periodic heartbeats; an idle
+  fleet costs nothing. Restart-proof recovery and a single-session lock.
+- **Delivery modes** — `gated` (test+lint gate, then PR), `direct-PR`, and
+  `local-only` (EM reviews, Director approves, fast-forward merge). Merge
+  polling and fleet sync (fetch, fast-forward, safe branch pruning).
+- **Research tasks** — investigations end in a report, never a PR, and can
+  be promoted in place into protected build tasks.
+- **Harnesses** — Claude Code verified out of the box; codex/opencode/pi
+  dispatch only after a supervised per-machine verification trial.
+
+See [PRD.md](PRD.md) for the full specification and [docs/adr/](docs/adr/)
+for design decisions.
 
 ## Repository layout
 

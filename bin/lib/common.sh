@@ -30,6 +30,7 @@ EM_DATA="$EM_ROOT/data"
 EM_STATE="$EM_ROOT/state"
 EM_PROJECTS="$EM_ROOT/projects"
 EM_WORKTREES="$EM_ROOT/worktrees"
+EM_CONFIG="$EM_ROOT/config"
 EM_TEMPLATES="$(cd -- "$EM_BIN/.." && pwd -P)/templates"
 
 log() { printf '%s\n' "$*" >&2; }

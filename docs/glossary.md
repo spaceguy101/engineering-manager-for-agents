@@ -23,7 +23,7 @@ The shared vocabulary of this system. Terms here are canonical; use them consist
 ## Execution & isolation
 - **Worktree** — a disposable `git worktree` under `worktrees/<id>/`, detached at the fetched default branch, where one IC does its work. Plain `git worktree` (no pool).
 - **Window** — the tmux window for a task, always named `em-<id>`. The Director can watch or type into it directly at any time.
-- **Harness / adapter** — the terminal agent program an EM or IC runs on (claude, codex, opencode, pi). An *adapter* = launch mechanics (in `em-spawn.sh`) + supervision knowledge (in `AGENTS.md`). M1 supports **claude only**.
+- **Harness / adapter** — the terminal agent program an EM or IC runs on (claude, codex, opencode, pi). An *adapter* = launch mechanics (in `em-spawn.sh`) + supervision knowledge (in `AGENTS.md`). claude ships verified; every other harness must pass a supervised **verification trial** per machine (recorded in `config/verified-harnesses`) before any dispatch.
 
 ## Supervision (M2+)
 - **Watcher** — background bash process (`em-watch.sh`) that sleeps on the fleet at zero token cost and wakes the EM with exactly one reason line: `signal | stale | check | heartbeat`.

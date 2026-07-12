@@ -33,4 +33,12 @@ Every append interrupts your manager — keep it sparse and supervisor-actionabl
 - Cannot proceed at all → `blocked: <what you need>`.
 - Gave up after real attempts → `failed: <summary + evidence>`.
 
+## Project memory
+
+If you learn durable, project-intrinsic knowledge the next agent will need
+(build/test mechanics, conventions, sharp edges not yet written down), record
+it: run `{EM_BIN}/em-ensure-agents-md.sh` in this worktree, add the knowledge
+to `AGENTS.md`, and commit it as part of your change. Skip this when you
+learned nothing worth keeping.
+
 {DELIVERY}

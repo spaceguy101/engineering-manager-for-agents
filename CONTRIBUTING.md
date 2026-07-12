@@ -13,10 +13,12 @@ correct the PRD live in [docs/adr/](docs/adr/); canonical vocabulary lives in
 [docs/glossary.md](docs/glossary.md) — use those terms in code, briefs, and
 docs, and record new decisions/terms there.
 
-Build order (PRD §7): **M1 skeleton (done — see ADR-0001: it is a dispatch
-slice, not a loop)** → M2 supervision (watcher, guard, recovery, lock) → M3
-delivery + fleet (registry, gate, local-only, PR polling, fleet sync) → M4
-breadth (research, promotion, more harnesses, bootstrap installs).
+Build order (PRD §7): all four milestones are built — M1 skeleton (see
+ADR-0001 for why it was a dispatch slice), M2 supervision (watcher, guard,
+recovery, lock), M3 delivery + fleet (registry, gate, local-only, PR
+polling, fleet sync), M4 breadth (research, promotion, harness verification,
+bootstrap, project memory). v1 is feature-complete per the PRD; changes now
+follow the shared-material gate below.
 
 ## Non-negotiable invariants (PRD §4.1)
 

@@ -165,7 +165,7 @@ expect "leaves {TASK} for the EM to fill" grep -qF '{TASK}' "$BRIEF"
 expect "no unrendered {ID}/{REPO}/{BRANCH} placeholders" test -z "$(grep -E '\{(ID|REPO|BRANCH|DEFAULT_BRANCH|STATUS_FILE)\}' "$BRIEF")"
 expect_rc "refuses to overwrite an existing brief" 1 "$BIN/em-brief.sh" tst-b1 demo
 expect "--force overwrites" "$BIN/em-brief.sh" tst-b1 demo --force
-expect_rc "--research is not available until M4" 1 "$BIN/em-brief.sh" tst-b2 demo --research
+expect "--research scaffolds a research brief" "$BIN/em-brief.sh" tst-b2 demo --research
 expect_rc "wants an existing clone" 1 "$BIN/em-brief.sh" tst-b3 nosuch
 
 # -------------------------------------------------- M3: registry and modes
@@ -304,6 +304,57 @@ expect "symlinked working copies are fetch-only" grep -q 'symlinked' <("$BIN/em-
 rm "$EM_ROOT/projects/simu"
 rm -f "$EM_ROOT/state/"*.meta "$EM_ROOT/state/"*.check.sh # M3 fixtures: nothing in flight for the M2 cases
 
+# --------------------------------------------------- M4: research and tools
+note "em-brief.sh --research — report-only contract"
+"$BIN/em-brief.sh" tst-x1 demo --research >/dev/null
+XB="$EM_ROOT/data/tst-x1/brief.md"
+expect "research brief targets the report file" grep -qF "$EM_ROOT/data/tst-x1/report.md" "$XB"
+expect "worktree declared scratch" grep -qi 'scratch' "$XB"
+expect "never opens a PR" test -z "$(grep 'gh pr create' "$XB")"
+expect "no gate in research briefs" test -z "$(grep 'em-validate' "$XB")"
+expect "leaves {TASK} for the EM" grep -qF '{TASK}' "$XB"
+
+note "em-harness.sh — detection and resolution"
+expect "env marker detects claude" test "$(env CLAUDECODE=1 "$BIN/em-harness.sh" detect)" = "claude"
+expect "per-task request wins" test "$(env CLAUDECODE=1 "$BIN/em-harness.sh" resolve codex)" = "codex"
+mkdir -p "$EM_ROOT/config"
+echo opencode > "$EM_ROOT/config/crew-harness"
+expect "crew-harness override applies" test "$("$BIN/em-harness.sh" resolve)" = "opencode"
+rm "$EM_ROOT/config/crew-harness"
+expect "falls back to the detected harness" test "$(env CLAUDECODE=1 "$BIN/em-harness.sh" resolve)" = "claude"
+
+note "em-promote.sh — research → protected build task"
+fake_meta tst-x2 demo
+expect_rc "refuses to promote a build task" 1 "$BIN/em-promote.sh" tst-x2
+printf 'window=em-tst-x2\nworktree=%s\nproject=demo\nkind=research\n' \
+  "$EM_ROOT/worktrees/tst-x2" > "$EM_ROOT/state/tst-x2.meta"
+expect "promotes a research task" "$BIN/em-promote.sh" tst-x2
+expect "kind flipped to build" grep -qx 'kind=build' "$EM_ROOT/state/tst-x2.meta"
+rm -f "$EM_ROOT/state/tst-x2.meta"
+
+note "em-ensure-agents-md.sh — project memory contract"
+MEM="$SANDBOX/mem1"
+mkdir -p "$MEM"
+expect "creates AGENTS.md where none exists" "$BIN/em-ensure-agents-md.sh" "$MEM"
+expect "AGENTS.md is a regular file" test -f "$MEM/AGENTS.md"
+expect "CLAUDE.md symlinks to it" test "$(readlink "$MEM/CLAUDE.md")" = "AGENTS.md"
+expect "idempotent" "$BIN/em-ensure-agents-md.sh" "$MEM"
+MEM2="$SANDBOX/mem2"
+mkdir -p "$MEM2"
+echo "# existing knowledge" > "$MEM2/CLAUDE.md"
+"$BIN/em-ensure-agents-md.sh" "$MEM2" >/dev/null 2>&1
+expect "existing CLAUDE.md content becomes AGENTS.md" grep -q 'existing knowledge' "$MEM2/AGENTS.md"
+MEM3="$SANDBOX/mem3"
+mkdir -p "$MEM3"
+echo a > "$MEM3/AGENTS.md"
+echo b > "$MEM3/CLAUDE.md"
+expect_rc "refuses when both are regular files" 1 "$BIN/em-ensure-agents-md.sh" "$MEM3"
+
+note "em-bootstrap.sh — detect-and-report only"
+out="$("$BIN/em-bootstrap.sh" 2>&1)"
+expect "always exits 0" "$BIN/em-bootstrap.sh"
+expect "git present, not reported missing" test -z "$(grep 'missing: git' <<< "$out")"
+
 # ------------------------------------------------------- M2: guard and lock
 note "em-guard.sh — beacon liveness warnings"
 BEACON="$EM_ROOT/state/.last-watcher-beat"
@@ -383,7 +434,8 @@ EOF
   expect_rc "spawn refuses an unfilled {TASK} brief" 1 "$BIN/em-spawn.sh" tst-s1 demo
   fill_task tst-s1
   expect_rc "spawn refuses a missing brief" 1 "$BIN/em-spawn.sh" tst-s9 demo
-  expect_rc "spawn refuses unverified harnesses (M4)" 1 "$BIN/em-spawn.sh" tst-s1 demo codex
+  expect_rc "spawn refuses unverified harnesses" 1 \
+    env -u EM_LAUNCH_OVERRIDE "$BIN/em-spawn.sh" tst-s1 demo codex
 
   expect "spawn succeeds with a filled brief" "$BIN/em-spawn.sh" tst-s1 demo
   META="$EM_ROOT/state/tst-s1.meta"
@@ -421,6 +473,31 @@ EOF
   expect "volatile state cleared" test ! -e "$META"
   expect "durable data/<id>/ kept" test -f "$BRIEF" # tst-b1 untouched
   expect "brief of the torn-down task kept too" test -f "$EM_ROOT/data/tst-s1/brief.md"
+
+  note "research lifecycle — scratch worktree, report-gated teardown"
+  "$BIN/em-brief.sh" tst-x3 demo --research >/dev/null
+  fill_task tst-x3
+  expect "research spawn succeeds" "$BIN/em-spawn.sh" tst-x3 demo --research
+  expect "meta records kind=research" grep -qx 'kind=research' "$EM_ROOT/state/tst-x3.meta"
+  echo scratch-mess > "$WT/tst-x3/junk.txt"
+  expect_rc "teardown REFUSES (3) without a report" 3 "$BIN/em-teardown.sh" tst-x3
+  echo "# findings" > "$EM_ROOT/data/tst-x3/report.md"
+  expect "with the report, scratch mess is no obstacle" "$BIN/em-teardown.sh" tst-x3
+  expect "report survives teardown" test -f "$EM_ROOT/data/tst-x3/report.md"
+
+  note "harness verification gate"
+  "$BIN/em-brief.sh" tst-x4 demo >/dev/null
+  fill_task tst-x4
+  expect_rc "unverified codex refused without the trial escape hatch" 1 \
+    env -u EM_LAUNCH_OVERRIDE "$BIN/em-spawn.sh" tst-x4 demo codex
+  mkdir -p "$EM_ROOT/config"
+  echo codex > "$EM_ROOT/config/verified-harnesses"
+  expect "verified codex dispatches" \
+    env -u EM_LAUNCH_OVERRIDE "$BIN/em-spawn.sh" tst-x4 demo codex
+  expect "meta records the harness" grep -qx 'harness=codex' "$EM_ROOT/state/tst-x4.meta"
+  expect "non-claude spawn installs no claude hook" test ! -e "$WT/tst-x4/.claude"
+  "$BIN/em-teardown.sh" tst-x4 >/dev/null 2>&1
+  rm -f "$EM_ROOT/config/verified-harnesses"
 fi
 
 # ------------------------------------------------------------------ summary

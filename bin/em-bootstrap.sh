@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# em-bootstrap.sh — session-start detection: report missing toolchain pieces
+# (one line each, with the exact install command), GitHub auth state, and a
+# harness override if configured; then run a bounded best-effort fleet sync.
+#
+# Usage:
+#   em-bootstrap.sh
+#
+# Detect → consent → install: this script only DETECTS and prints. The EM
+# lists problems to the Director with a one-line purpose each, waits for
+# consent, and installs only the approved set — never install anything
+# without this-session approval. Silence means all good. Always exits 0
+# (report-only). Fleet sync is timeout-guarded
+# (EM_FLEET_SYNC_BOOTSTRAP_TIMEOUT, default 20s) and non-fatal.
+set -euo pipefail
+# shellcheck source=bin/lib/common.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
+
+install_hint() { # <package>
+  if [ "$(uname -s)" = "Darwin" ]; then
+    printf 'brew install %s' "$1"
+  else
+    printf 'sudo apt-get install -y %s (or your distro equivalent)' "$1"
+  fi
+}
+
+main() {
+  case "${1:-}" in -h | --help) usage; exit 0 ;; esac
+
+  command -v tmux >/dev/null ||
+    printf 'missing: tmux (IC windows) — install: %s\n' "$(install_hint tmux)"
+
+  if ! command -v git >/dev/null; then
+    printf 'missing: git (everything) — install: %s\n' "$(install_hint git)"
+  else
+    local gv
+    gv="$(git --version | awk '{print $3}')"
+    case "$gv" in
+      1.* | 2.[0-4] | 2.[0-4].*)
+        printf 'outdated: git %s (need >= 2.5 for worktrees) — upgrade: %s\n' "$gv" "$(install_hint git)"
+        ;;
+    esac
+  fi
+
+  if ! command -v gh >/dev/null; then
+    printf 'missing: gh (GitHub PRs) — install: %s\n' "$(install_hint gh)"
+  elif ! gh auth status >/dev/null 2>&1; then
+    printf 'NEEDS_GH_AUTH — ask the Director to run: gh auth login\n'
+  fi
+
+  if [ -f "$EM_CONFIG/crew-harness" ]; then
+    printf 'harness-override: %s\n' "$(head -n1 "$EM_CONFIG/crew-harness" | tr -d '[:space:]')"
+  fi
+
+  # Bounded, best-effort fleet sync; only abnormal lines surface.
+  local timeout="${EM_FLEET_SYNC_BOOTSTRAP_TIMEOUT:-20}" sync
+  if sync="$(run_bounded "$timeout" "$EM_BIN/em-fleet-sync.sh" 2>/dev/null)"; then
+    printf '%s\n' "$sync" |
+      grep -Ev '^$|up to date|fast-forwarded|fetched only' |
+      sed 's/^/fleet-sync: /' || true
+  else
+    printf 'fleet-sync: timed out or failed (non-fatal) — investigate only if it blocks a task\n'
+  fi
+  exit 0
+}
+
+main "$@"

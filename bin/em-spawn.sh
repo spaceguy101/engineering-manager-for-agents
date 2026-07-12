@@ -3,18 +3,28 @@
 # meta record, then launch the agent with its brief.
 #
 # Usage:
-#   em-spawn.sh <id> <repo> [<harness>]
+#   em-spawn.sh <id> <repo> [<harness>] [--research]
 #
 # Requires a filled brief at data/<id>/brief.md (no {TASK} placeholder left).
 # Creates the window in the current tmux session, or in a dedicated 'em'
-# session when running outside tmux. M1 supports the claude harness only.
+# session when running outside tmux. --research records kind=research (the
+# worktree is scratch; teardown requires the report instead).
+#
+# Harness resolves via em-harness.sh (request > config/crew-harness >
+# detected). claude ships verified; any other harness must be listed in
+# config/verified-harnesses (one name per line, added after a supervised
+# trial task — see AGENTS.md). Never dispatch on an unverified adapter.
+# The turn-end hook is claude-only; other harnesses rely on stale/heartbeat
+# supervision.
 #
 # The two writes into the worktree/clone (the Stop-hook settings file and one
 # .git/info/exclude pattern) are sanctioned spawn provisioning (ADR-0003) —
 # harness mechanics, never project content.
 #
 # Test seam: EM_LAUNCH_OVERRIDE replaces the harness launch command (the brief
-# prompt is still appended as the final argument). Not Director-facing.
+# prompt is still appended as the final argument). It doubles as the
+# raw-launch escape hatch for harness verification trials. Not
+# Director-facing.
 set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
@@ -54,15 +64,51 @@ EOF
   fi
 }
 
+# harness_cmd <harness> — the launch command for a verified adapter. The
+# non-claude commands are recorded from adapter research and are confirmed
+# empirically during each harness's verification trial.
+harness_cmd() {
+  case "$1" in
+    claude) printf 'claude --dangerously-skip-permissions\n' ;;
+    codex) printf 'codex --dangerously-bypass-approvals-and-sandbox\n' ;;
+    opencode) printf 'opencode --prompt\n' ;;
+    pi) printf 'pi\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+harness_verified() {
+  [ "$1" = "claude" ] && return 0
+  [ -f "$EM_CONFIG/verified-harnesses" ] &&
+    grep -qx "$1" "$EM_CONFIG/verified-harnesses"
+}
+
 main() {
-  local id="${1:-}" repo="${2:-}" harness="${3:-claude}"
-  case "$id" in -h | --help) usage; exit 0 ;; esac
+  local id="" repo="" harness="" kind=build arg
+  for arg in "$@"; do
+    case "$arg" in
+      -h | --help) usage; exit 0 ;;
+      --research) kind=research ;;
+      -*) die "unknown option '$arg'" ;;
+      *)
+        if [ -z "$id" ]; then id="$arg"
+        elif [ -z "$repo" ]; then repo="$arg"
+        elif [ -z "$harness" ]; then harness="$arg"
+        else usage >&2; exit 1
+        fi
+        ;;
+    esac
+  done
   [ -n "$id" ] && [ -n "$repo" ] || { usage >&2; exit 1; }
   require_id "$id"
   repo="${repo#projects/}"
 
-  [ "$harness" = "claude" ] ||
-    die "harness '$harness' is unverified — M1 supports claude only (adapters arrive in M4)"
+  harness="$("$EM_BIN/em-harness.sh" resolve "$harness")"
+  harness_cmd "$harness" >/dev/null ||
+    die "unknown harness '$harness' (claude|codex|opencode|pi)"
+  if [ -z "${EM_LAUNCH_OVERRIDE:-}" ] && ! harness_verified "$harness"; then
+    die "harness '$harness' is unverified on this machine — run a supervised trial task first (AGENTS.md: harness verification), then add it to config/verified-harnesses"
+  fi
 
   local brief="$EM_DATA/$id/brief.md"
   [ -f "$brief" ] || die "no brief at data/$id/brief.md — run em-brief.sh first"
@@ -81,7 +127,11 @@ main() {
   local wt
   wt="$("$EM_BIN/em-worktree.sh" add "$id" "$repo")"
 
-  install_turn_end_hook "$wt" "$id"
+  # Turn-end hook mechanics are claude-specific; other harnesses rely on
+  # stale/heartbeat supervision.
+  if [ "$harness" = "claude" ]; then
+    install_turn_end_hook "$wt" "$id"
+  fi
 
   mkdir -p "$EM_STATE"
   : > "$EM_STATE/$id.status"
@@ -90,7 +140,7 @@ window=$(window_name "$id")
 worktree=$wt
 project=$repo
 harness=$harness
-kind=build
+kind=$kind
 mode=$mode
 auto=$auto
 pr=
@@ -110,7 +160,7 @@ EOF
   local target prompt launch
   target="$(find_window "$id")" || die "window $win vanished after creation"
   prompt="You are an IC agent. Read your brief at $brief and execute it. Work only in this directory."
-  launch="${EM_LAUNCH_OVERRIDE:-claude --dangerously-skip-permissions} \"$prompt\""
+  launch="${EM_LAUNCH_OVERRIDE:-$(harness_cmd "$harness")} \"$prompt\""
   tmux_cmd send-keys -t "$target" -l -- "$launch"
   tmux_cmd send-keys -t "$target" Enter
 
