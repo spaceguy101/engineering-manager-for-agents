@@ -11,6 +11,23 @@ merges, or investigation reports.
 This is not an app, harness, skill, or CLI — it is a repository. Installing it
 is cloning it.
 
+## Why
+
+**The problem.** Running one coding agent is easy. The moment you want three or
+more project tasks running in parallel — bug fixes, investigations, plans,
+audits — you become a tab-juggler: babysitting sessions, copy-pasting context
+between repos, and forgetting which terminal had the failing test. There is no
+supervision layer, no isolation between parallel tasks, and no single place
+where outcomes surface.
+
+**The solution.** An Engineering Manager (EM) for AI agents: you — the
+Director — talk to exactly one agent, the EM. The EM never writes project code
+itself. It hires, briefs, supervises, and offboards a team of autonomous IC
+(individual contributor) agents, each running in its own tmux window against
+its own disposable git worktree. Finished work comes back to you as
+ready-to-review PRs, approved local merges, or standalone investigation
+reports.
+
 ## Install
 
 Prerequisites: `git` (≥ 2.5), `tmux`, a supported terminal coding agent
