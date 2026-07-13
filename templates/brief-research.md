@@ -23,6 +23,18 @@ never open a PR.
 - If the investigation uncovers work that should ship (a fix, a repro worth
   turning into a regression test), say so in the report — promoting this
   task into a build task is the EM's call, not yours.
+- When investigating a bug, reproduce it end-to-end, as close to how a real
+  user hits it as you can, before theorizing - evidence over speculation.
+- Pre-existing problems you notice outside the task (broken tests, lint debt,
+  UI that looks off) belong in the report too, so they can be queued as
+  their own tasks.
+
+## Writing conventions
+
+- Use plain dashes, never em dashes.
+- Never hand-edit `CHANGELOG.md` or any file marked auto-generated.
+- In the report and any Markdown you write, put each sentence on its own
+  line (keep normal Markdown structure otherwise).
 
 ## Status protocol
 

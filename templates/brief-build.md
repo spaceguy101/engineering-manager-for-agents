@@ -18,6 +18,29 @@ all communication routes through the EM.
 - Commit as you go with clear messages. Uncommitted work is at risk.
 - If the project has an `AGENTS.md` or `CLAUDE.md`, read it before you start.
 
+## Engineering standards
+
+- When making technical decisions, prefer quality, simplicity, robustness,
+  and long-term maintainability over implementation speed or effort.
+- Fixing a bug: before writing the fix, reproduce it end-to-end, as close to
+  how a real user hits it as you can. This proves you found the real problem;
+  then turn the repro into a regression test that ships with the fix.
+- Hold a high bar for everything your change touches: no lint errors, no
+  failing or flaky tests, no UI that visibly looks off. If you find a
+  pre-existing problem *outside* your task (a broken test, lint debt, a
+  visual glitch), do not silently ignore it - but do not expand scope either:
+  fix it only if it is trivial and inside code you are already changing;
+  otherwise describe it when you report done (PR description or final note)
+  so it can be queued as its own task.
+
+## Writing conventions
+
+- Use plain dashes, never em dashes.
+- Never add yourself or any agent name as co-author in commit messages.
+- Never hand-edit `CHANGELOG.md` or any file marked auto-generated.
+- When writing or substantially editing long Markdown files, put each
+  sentence on its own line (keep normal Markdown structure otherwise).
+
 ## Status protocol
 
 Report phase changes by appending ONE line to your status file:
