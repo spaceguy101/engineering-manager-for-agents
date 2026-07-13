@@ -95,7 +95,7 @@ verify_launch() {
   fi
   sleep "$secs"
   pane="$(tmux_cmd capture-pane -p -t "$target" 2>/dev/null || true)"
-  if printf '%s\n' "$pane" | grep -qi 'trust the files'; then
+  if printf '%s\n' "$pane" | grep -qiE 'trust the files|workspace trust'; then
     log "spawn-check: trust dialog showing — accept it: em-send.sh $id --key Enter"
   elif printf '%s\n' "$pane" | grep -qiE 'bypass ?permissions'; then
     log "spawn-check: bypass-permissions dialog showing (defaults to \"No, exit\") — accept it: em-send.sh $id --key Down, then em-send.sh $id --key Enter"

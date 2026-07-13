@@ -644,6 +644,22 @@ EOF
   expect_rc "relaunch of an unknown task fails" 1 "$BIN/em-relaunch.sh" tst-zz
   "$BIN/em-teardown.sh" tst-rl1 >/dev/null 2>&1
 
+  note "em-status.sh — default busy regex covers cursor's working indicator"
+  cat > "$SANDBOX/fakebin/cursorish" <<'EOF'
+#!/usr/bin/env bash
+echo "⠘⠣ Running  921 tokens"
+exec sleep 600
+EOF
+  chmod +x "$SANDBOX/fakebin/cursorish"
+  "$BIN/em-brief.sh" tst-cb1 demo >/dev/null
+  fill_task tst-cb1
+  env EM_LAUNCH_OVERRIDE="$SANDBOX/fakebin/cursorish" \
+    "$BIN/em-spawn.sh" tst-cb1 demo cursor >/dev/null 2>&1
+  expect "cursor-style busy line appears" wait_for_pane tst-cb1 'Running  921 tokens'
+  expect "default regex classifies the cursor pane busy" \
+    grep -qE 'tst-cb1 +demo +[^ ]+ +busy' <("$BIN/em-status.sh" 2>/dev/null)
+  "$BIN/em-teardown.sh" tst-cb1 >/dev/null 2>&1
+
   note "em-spawn.sh — post-launch pane check"
   cat > "$SANDBOX/fakebin/trusty" <<'EOF'
 #!/usr/bin/env bash

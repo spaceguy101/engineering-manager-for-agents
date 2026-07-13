@@ -313,8 +313,8 @@ lean on heartbeats and peeks for them.
 - Busy pane: a working claude shows a spinner and `esc to interrupt`. A pane
   showing the input box `>` with no spinner is idle/waiting.
   `bin/em-status.sh` classifies panes busy/idle by this indicator
-  (`EM_BUSY_REGEX`, default `esc to interrupt` — extend it when verifying
-  other harnesses).
+  (`EM_BUSY_REGEX` — its default covers claude's and cursor's working
+  indicators; extend it when verifying other harnesses).
 - Interrupt: `Escape` (via `em-send <id> --key Escape`).
 - Trust dialog: first launch in a new directory may ask "Do you trust the
   files in this folder?" — select trust (`em-send <id> --key Enter`).
@@ -334,14 +334,24 @@ lean on heartbeats and peeks for them.
   `curl https://cursor.com/install -fsS | bash` (into `~/.local/bin`); the
   CLI auto-updates itself.
 - Launch flag: `--force` — allow commands unless explicitly denied, the
-  bypass-permissions equivalent. If a pane still sits at a y/n approval
-  prompt, the flag isn't covering that action: answer it, and escalate if
-  it recurs.
+  bypass-permissions equivalent (the TUI footer shows "Run Everything").
+  If a pane still sits at a y/n approval prompt, the flag isn't covering
+  that action: answer it, and escalate if it recurs.
 - Auth is separate from the IDE: the Director runs `agent login` (browser
   flow) once, or provides `CURSOR_API_KEY`. `agent status` checks it.
-- Busy pane / interrupt key: unverified — confirm during this machine's
-  verification trial and record here (extend `EM_BUSY_REGEX` with the
-  observed working indicator).
+- Trust dialog: **every spawn** shows "Workspace Trust Required" (a fresh
+  worktree is always an untrusted directory) — accept with
+  `em-send <id> --key Enter`; spawn's post-launch check flags it. The
+  `--trust` flag only applies to print/headless mode, so it cannot
+  suppress the dialog for TUI ICs.
+- Busy pane: a working cursor shows a braille spinner and
+  `Running  <n> tokens` (covered by the default `EM_BUSY_REGEX`). Never
+  key on the `ctrl+c to stop` hint — it disappears whenever a follow-up
+  message is queued in the input box.
+- Interrupt: `Ctrl+C` (`em-send <id> --key C-c`) cancels the running turn
+  and never exits the CLI. It can leave the interrupted message sitting in
+  the input box — peek, and send `--key C-c` again to clear the box before
+  a corrective line (`C-u` does not clear it).
 - No turn-end hook (the CLI does not reliably emit a stop event) — stale
   detection is heartbeat/peek-based, like all non-claude harnesses.
 - `agent resume` / `--resume <id>` exist, but `em-relaunch.sh` replays the

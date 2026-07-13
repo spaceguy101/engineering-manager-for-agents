@@ -6,8 +6,9 @@
 #
 # Columns: id, project, kind/mode, pane state (busy|idle|dead), and the
 # task's last status line, with the recorded PR URL appended when one is
-# armed. busy = the pane matches EM_BUSY_REGEX (default: claude's
-# "esc to interrupt" working indicator; extend it for other harnesses).
+# armed. busy = the pane matches EM_BUSY_REGEX (the default covers claude's
+# "esc to interrupt" and cursor's "Running <n> tokens" working indicators;
+# extend it when verifying other harnesses).
 # Cheap by design: pane content is only pattern-matched for the busy check,
 # never printed (that's em-peek.sh). Prints "no tasks in flight" when the
 # fleet is idle. The first stop for recovery and every heartbeat review.
@@ -27,7 +28,7 @@ main() {
     return 0
   fi
 
-  local busy_re="${EM_BUSY_REGEX:-esc to interrupt}"
+  local busy_re="${EM_BUSY_REGEX:-esc to interrupt|Running +[0-9]+ tokens}"
 
   printf '%-18s %-14s %-18s %-5s %s\n' ID PROJECT KIND/MODE PANE 'LAST STATUS'
   local id project kind mode pr target win last
