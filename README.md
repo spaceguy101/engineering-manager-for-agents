@@ -55,6 +55,11 @@ repositories into `projects/` (the EM can do this for you).
   work that hasn't landed on a remote.
 - All durable state lives on disk (`data/`, `state/`) — killing and
   relaunching the EM is a non-event.
+- **Visibility without asking:** `bin/em-status.sh` prints a one-screen fleet
+  overview and `bin/em-dashboard.sh` is its live, self-refreshing version —
+  both read-only and safe for the Director to run in any terminal. To watch
+  an IC work, attach to its tmux window (`tmux attach -t em` when the fleet
+  runs in the dedicated background session).
 
 ## Status
 

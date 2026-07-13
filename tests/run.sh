@@ -324,6 +324,33 @@ expect "window reported dead" grep -q 'dead' <<< "$out"
 expect "shows the armed PR" grep -q 'pull/9' <<< "$out"
 rm -f "$EM_ROOT/state/tst-st1".*
 
+note "em-dashboard.sh — Director live view (single frame)"
+expect "idle fleet frame renders" grep -q 'no tasks in flight' <("$BIN/em-dashboard.sh" --once 2>/dev/null)
+fake_meta tst-db1 demo
+echo "blocked: gate failing" >> "$EM_ROOT/state/tst-db1.status"
+printf '## Queued\n- [ ] tst-qq - queued task (repo: demo) blocked-by: tst-db1 - overlap\n\n## Done\n' > "$EM_ROOT/data/backlog.md"
+rm -f "$EM_ROOT/state/.last-watcher-beat"
+out="$("$BIN/em-dashboard.sh" --once 2>/dev/null)"
+expect "frame lists the task" grep -q 'tst-db1' <<< "$out"
+expect "frame shows the last status" grep -q 'blocked: gate failing' <<< "$out"
+expect "frame includes the queued section" grep -q 'tst-qq' <<< "$out"
+expect "supervision reported off without a watcher beacon" grep -q 'watcher not running' <<< "$out"
+touch "$EM_ROOT/state/.last-watcher-beat"
+expect "supervision active with a fresh beacon" \
+  grep -q 'supervision: active' <("$BIN/em-dashboard.sh" --once 2>/dev/null)
+expect_rc "no attach hint without the em session" 1 grep -q 'tmux attach' <<< "$out"
+if command -v tmux >/dev/null; then
+  tmux_cmd new-session -d -s em -c "$EM_ROOT" 2>/dev/null || true
+  expect "frame hints at tmux attach when the em session exists" \
+    grep -q 'tmux attach -t em' <("$BIN/em-dashboard.sh" --once 2>/dev/null)
+  tmux_cmd kill-session -t '=em' 2>/dev/null
+else
+  skip "tmux not installed — dashboard attach-hint case skipped"
+fi
+expect_rc "rejects an unknown flag" 1 "$BIN/em-dashboard.sh" --nope
+expect_rc "rejects a bad interval" 1 "$BIN/em-dashboard.sh" --interval xx --once
+rm -f "$EM_ROOT/state/tst-db1".* "$EM_ROOT/state/.last-watcher-beat" "$EM_ROOT/data/backlog.md"
+
 note "em-project-add.sh — registry add + validate"
 make_project padd
 out="$("$BIN/em-project-add.sh" padd --desc 'registry test project' --mode direct-PR)"
