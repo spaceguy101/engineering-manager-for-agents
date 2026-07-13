@@ -373,6 +373,26 @@ grep -v 'nosuchmode' "$EM_ROOT/data/projects.md" > "$EM_ROOT/data/projects.md.tm
   mv "$EM_ROOT/data/projects.md.tmp" "$EM_ROOT/data/projects.md"
 expect "--validate green again after the fix" "$BIN/em-project-add.sh" --validate
 
+note "per-project memory + knowledge base (data/projects/<name>/)"
+expect "add scaffolds the kb directory" test -d "$EM_ROOT/data/projects/padd/kb"
+expect "add scaffolds memory.md" grep -q 'EM memory' "$EM_ROOT/data/projects/padd/memory.md"
+expect_rc "the 'projects' task id is reserved" 1 "$BIN/em-brief.sh" projects demo
+expect "brief without kb docs has no knowledge section" \
+  test -z "$(grep 'Project knowledge' "$EM_ROOT/data/tst-b1/brief.md")"
+mkdir -p "$EM_ROOT/data/projects/demo/kb"
+echo '# arch' > "$EM_ROOT/data/projects/demo/kb/architecture.md"
+"$BIN/em-brief.sh" tst-kb1 demo >/dev/null
+expect "build brief gains the knowledge section" \
+  grep -q 'Project knowledge' "$EM_ROOT/data/tst-kb1/brief.md"
+expect "knowledge section lists the kb doc path" \
+  grep -qF "$EM_ROOT/data/projects/demo/kb/architecture.md" "$EM_ROOT/data/tst-kb1/brief.md"
+expect "no unrendered {KNOWLEDGE} placeholder" \
+  test -z "$(grep -F '{KNOWLEDGE}' "$EM_ROOT/data/tst-kb1/brief.md")"
+"$BIN/em-brief.sh" tst-kb2 demo --research >/dev/null
+expect "research brief lists kb docs too" \
+  grep -qF "kb/architecture.md" "$EM_ROOT/data/tst-kb2/brief.md"
+rm -rf "$EM_ROOT/data/projects/demo" "$EM_ROOT/data/tst-kb1" "$EM_ROOT/data/tst-kb2"
+
 # --------------------------------------------------- M4: research and tools
 note "em-brief.sh --research — report-only contract"
 "$BIN/em-brief.sh" tst-x1 demo --research >/dev/null

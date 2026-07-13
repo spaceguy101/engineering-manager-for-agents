@@ -9,6 +9,10 @@
 #
 # Writes one registry line (the format em-project-mode.sh parses):
 #   - <name> [<mode>[ +auto]] - <desc> (added <date>) [| test: <cmd>] [| lint: <cmd>]
+# Also scaffolds the project's long-term store, data/projects/<name>/:
+# memory.md (the EM's accumulated knowledge of the project) and kb/ (the
+# Director's knowledge base — architecture docs, standing instructions —
+# spliced into every IC brief by em-brief.sh). Idempotent for existing files.
 # The clone/symlink must already exist at projects/<name>. Default mode:
 # gated. A gated project with no gate commands is registered with a warning —
 # it cannot take build tasks until test:/lint: are recorded. Values must not
@@ -65,6 +69,11 @@ cmd_add() {
   mkdir -p "$EM_DATA"
   [ -f "$REGISTRY" ] || printf '# Projects\n' > "$REGISTRY"
   printf '%s\n' "$line" >> "$REGISTRY"
+
+  local store="$EM_DATA/projects/$name"
+  mkdir -p "$store/kb"
+  [ -f "$store/memory.md" ] || printf '# %s — EM memory\n\nDurable, fleet-side knowledge the EM has accumulated about this project:\ntask-history lessons, recurring failure modes, Director rulings. EM-written;\nnever shown to ICs verbatim. Director docs (architecture, documentation,\nstanding instructions) belong in kb/ instead — briefs list those for ICs.\n' \
+    "$name" > "$store/memory.md"
   if [ "$mode" = "gated" ] && [ -z "$test_cmd" ] && [ -z "$lint_cmd" ]; then
     warn "gated project with no gate commands — it cannot take build tasks until test:/lint: are recorded"
   fi

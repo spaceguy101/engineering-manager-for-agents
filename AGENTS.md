@@ -39,6 +39,10 @@ PR, never straight to main.
 - `bin/` — your toolbelt. Every script prints its own usage with `--help`.
 - `data/<id>/brief.md` — per-task IC contract. `data/backlog.md` — task queue.
   `data/director.md` — Director's preferences (read at session start if present).
+- `data/projects/<name>/` — per-project long-term store: `memory.md` is your
+  own accumulated knowledge of the project; `kb/` is the Director's knowledge
+  base (architecture, documentation, standing instructions) — every IC brief
+  lists its files automatically.
 - `state/<id>.status` — IC-appended `<state>: <note>` lines; read this before
   peeking a pane. `state/<id>.meta` — task record. `state/<id>.turn-ended` —
   touched when the IC's turn ends.
@@ -114,6 +118,22 @@ knowledge dump:
   `bin/em-project-add.sh --validate` lints the whole registry. Registry
   values must not contain ` | ` (the field delimiter): wrap a piped gate
   command in a script inside the project instead.
+- **Per-project memory & knowledge base** — `data/projects/<name>/`,
+  scaffolded by `em-project-add.sh` (create it by hand for projects
+  registered before it existed):
+  - `memory.md` is yours. Read it when a task arrives for the project;
+    append durable, fleet-side lessons as tasks finish (gate quirks,
+    recurring failure modes, review patterns, Director rulings for this
+    project). Never duplicate what the project's own AGENTS.md or git
+    history already records.
+  - `kb/` is the Director's. When the Director hands you architecture
+    notes, documentation, or standing instructions for a project, file them
+    there (Markdown, one topic per file) and confirm where they went.
+    `em-brief.sh` lists every `kb/` file in each brief as binding context
+    for the IC, so keep it curated: update or remove stale docs on the
+    Director's word rather than accumulating.
+  Both live under `data/` — writing them is fleet bookkeeping, never a
+  project write.
 - A project not in the registry cannot take build tasks — `em-brief.sh`
   refuses rather than guessing a delivery mode (research briefs need only
   the clone). If the registry is ever lost, bootstrap flags every clone;
@@ -161,10 +181,13 @@ entries — PRs, local main, and report files are the durable record.
 
 ## Task lifecycle
 
-1. **Brief.** `bin/em-brief.sh <id> <repo>` (add `--research` for research
-   tasks) scaffolds `data/<id>/brief.md`.
+1. **Brief.** Read `data/projects/<repo>/memory.md` first (if present) so
+   its lessons shape the task. `bin/em-brief.sh <id> <repo>` (add
+   `--research` for research tasks) scaffolds `data/<id>/brief.md`, splicing
+   in the knowledge-base file list automatically.
    Then edit that file and replace `{TASK}` with: what to do, acceptance
-   criteria, constraints, and any context the IC can't discover itself.
+   criteria, constraints, and any context the IC can't discover itself
+   (including anything relevant from memory.md).
    The rest of the scaffold (branch, status protocol, delivery) is the
    contract — don't weaken it.
 2. **Spawn.** `bin/em-spawn.sh <id> <repo> [<harness>] [--research]`. Spawn
@@ -197,6 +220,8 @@ entries — PRs, local main, and report files are the durable record.
    wake, or your own verification), run `bin/em-teardown.sh <id>`, then
    `bin/em-fleet-sync.sh <project>` so the clone catches up and the merged
    branch is pruned; move the task to Done and dispatch anything unblocked.
+   If the task taught you something durable about the project, append it to
+   `data/projects/<project>/memory.md` while it's fresh.
    If teardown refuses (exit 3), investigate and explain — e.g. a
    squash-merge makes landed work look unlanded until fleet sync fetches the
    result — and never `--force` without an explicit instruction to discard.

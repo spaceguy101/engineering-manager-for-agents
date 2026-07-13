@@ -14,6 +14,10 @@
 # cannot be briefed either. Research briefs need only the clone.
 # Research: renders templates/brief-research.md — deliverable is
 # data/<id>/report.md, never a PR; no mode resolution.
+# Both kinds splice a "Project knowledge" section listing every file in the
+# Director's knowledge base (data/projects/<repo>/kb/) when it is non-empty,
+# so ICs always see the project's architecture docs and standing
+# instructions.
 # The {TASK} placeholder is left for the EM to fill in (description,
 # acceptance criteria, constraints) before spawning. Refuses to overwrite an
 # existing brief unless --force is given.
@@ -77,9 +81,19 @@ main() {
     base_ref="$branch"
   fi
 
+  local kb_dir="$EM_DATA/projects/$repo/kb" knowledge="" kb_files
+  if [ -d "$kb_dir" ]; then
+    kb_files="$(find "$kb_dir" -type f ! -name '.*' | sort)"
+    if [ -n "$kb_files" ]; then
+      knowledge=$'\n## Project knowledge\n\nThe Director maintains a knowledge base for this project (architecture,\ndocumentation, standing instructions). Read every file listed below before\nyou start; it is binding context for this task:\n\n'
+      knowledge+="$(printf '%s\n' "$kb_files" | sed 's/^/- /')"$'\n'
+    fi
+  fi
+
   local content
   content="$(<"$tpl")"
   [ -n "$dtpl" ] && content="${content//\{DELIVERY\}/$(<"$dtpl")}"
+  content="${content//\{KNOWLEDGE\}/$knowledge}"
   content="${content//\{ID\}/$id}"
   content="${content//\{REPO\}/$repo}"
   content="${content//\{BRANCH\}/em/$id}"

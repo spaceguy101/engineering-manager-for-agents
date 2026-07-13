@@ -17,7 +17,7 @@ all communication routes through the EM.
   touch anything outside this worktree.
 - Commit as you go with clear messages. Uncommitted work is at risk.
 - If the project has an `AGENTS.md` or `CLAUDE.md`, read it before you start.
-
+{KNOWLEDGE}
 ## Engineering standards
 
 - When making technical decisions, prefer quality, simplicity, robustness,

@@ -55,6 +55,11 @@ repositories into `projects/` (the EM can do this for you).
   work that hasn't landed on a remote.
 - All durable state lives on disk (`data/`, `state/`) — killing and
   relaunching the EM is a non-event.
+- **Per-project memory and knowledge base:** the EM keeps what it learns
+  about each project in `data/projects/<name>/memory.md`, and you can drop
+  architecture docs and standing instructions into
+  `data/projects/<name>/kb/` (or hand them to the EM to file) — every IC
+  brief for that project lists those docs as required reading.
 - **Visibility without asking:** `bin/em-status.sh` prints a one-screen fleet
   overview and `bin/em-dashboard.sh` is its live, self-refreshing version —
   both read-only and safe for the Director to run in any terminal. To watch

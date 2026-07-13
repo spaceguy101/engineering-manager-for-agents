@@ -60,6 +60,9 @@ require_id() {
     '' | -* | *- | *[!a-z0-9-]*)
       die "invalid task id '${1:-}' — want a kebab slug like fix-login-k3"
       ;;
+    projects)
+      die "task id 'projects' is reserved — data/projects/ holds per-project memory"
+      ;;
   esac
 }
 
