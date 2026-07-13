@@ -3,7 +3,7 @@
 # effective harness for a new IC.
 #
 # Usage:
-#   em-harness.sh detect                 print claude|codex|opencode|pi|unknown
+#   em-harness.sh detect                 print claude|codex|opencode|pi|cursor|unknown
 #   em-harness.sh resolve [<requested>]  effective IC harness, in priority:
 #                                        per-task request > config/crew-harness
 #                                        > detected (unknown → claude)
@@ -30,6 +30,10 @@ detect() {
     printf 'pi\n'
     return
   fi
+  if [ -n "${CURSOR_AGENT:-}" ]; then
+    printf 'cursor\n'
+    return
+  fi
 
   # Walk the process ancestry looking for a known harness binary.
   local pid="$$" comm hops=0
@@ -40,6 +44,7 @@ detect() {
       codex*) printf 'codex\n'; return ;;
       opencode*) printf 'opencode\n'; return ;;
       pi) printf 'pi\n'; return ;;
+      cursor-agent* | agent) printf 'cursor\n'; return ;;
     esac
     pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
     [ -n "$pid" ] || break

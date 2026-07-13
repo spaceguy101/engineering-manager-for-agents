@@ -79,8 +79,9 @@ repositories into `projects/` (the EM can do this for you).
   polling and fleet sync (fetch, fast-forward, safe branch pruning).
 - **Research tasks** — investigations end in a report, never a PR, and can
   be promoted in place into protected build tasks.
-- **Harnesses** — Claude Code verified out of the box; codex/opencode/pi
-  dispatch only after a supervised per-machine verification trial.
+- **Harnesses** — Claude Code verified out of the box; codex/opencode/pi/
+  cursor (the Cursor agent CLI) dispatch only after a supervised per-machine
+  verification trial.
 
 ## Repository layout
 

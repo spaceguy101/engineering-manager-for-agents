@@ -292,8 +292,8 @@ trusted over the heartbeat's own look at the panes.
 ICs default to the harness you run on (`bin/em-harness.sh resolve`); the
 Director can override globally (`config/crew-harness`) or per task ("run
 this one on codex" → pass the harness to `em-spawn.sh`). **Never dispatch on
-an unverified adapter** — claude ships verified; codex/opencode/pi must pass
-a verification trial on this machine first:
+an unverified adapter** — claude ships verified; codex/opencode/pi/cursor
+must pass a verification trial on this machine first:
 
 1. With the Director's knowledge, pick a trivial, harmless task on a
    scratch/test project and brief it normally.
@@ -325,6 +325,31 @@ lean on heartbeats and peeks for them.
 - Turn-end signal: `state/<id>.turn-ended` gets touched when the IC ends a
   turn (installed by spawn). Recent touch + idle pane = the IC stopped and
   may need a nudge or has reported.
+
+### cursor
+
+- The harness is Cursor's standalone agent CLI, not the Cursor IDE: the
+  binary is `agent` (older installs: `cursor-agent`; a plain `cursor` on
+  PATH is the IDE launcher, never the harness). Install:
+  `curl https://cursor.com/install -fsS | bash` (into `~/.local/bin`); the
+  CLI auto-updates itself.
+- Launch flag: `--force` — allow commands unless explicitly denied, the
+  bypass-permissions equivalent. If a pane still sits at a y/n approval
+  prompt, the flag isn't covering that action: answer it, and escalate if
+  it recurs.
+- Auth is separate from the IDE: the Director runs `agent login` (browser
+  flow) once, or provides `CURSOR_API_KEY`. `agent status` checks it.
+- Busy pane / interrupt key: unverified — confirm during this machine's
+  verification trial and record here (extend `EM_BUSY_REGEX` with the
+  observed working indicator).
+- No turn-end hook (the CLI does not reliably emit a stop event) — stale
+  detection is heartbeat/peek-based, like all non-claude harnesses.
+- `agent resume` / `--resume <id>` exist, but `em-relaunch.sh` replays the
+  recorded fresh launch — brief + progress note is the recovery contract,
+  same as every harness.
+- Auto-updates can shift the TUI text: if busy/idle classification looks
+  wrong for cursor panes, re-verify the indicator and update
+  `EM_BUSY_REGEX`.
 
 ## Talking to the Director
 

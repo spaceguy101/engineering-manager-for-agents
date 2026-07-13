@@ -55,11 +55,14 @@ main() {
   fi
 
   # The harness new ICs would launch on must exist on this machine —
-  # otherwise the failure surfaces mid-dispatch instead of here.
-  local ic_harness
+  # otherwise the failure surfaces mid-dispatch instead of here. Check the
+  # binary the harness launches as (cursor's is agent/cursor-agent; a plain
+  # `cursor` on PATH is the IDE, not the harness).
+  local ic_harness ic_bin
   ic_harness="$("$EM_BIN/em-harness.sh" resolve 2>/dev/null || printf 'claude')"
-  command -v "$ic_harness" >/dev/null ||
-    printf 'missing: %s (the IC harness new tasks launch on) — install it or change config/crew-harness\n' "$ic_harness"
+  ic_bin="$(harness_binary "$ic_harness")"
+  command -v "$ic_bin" >/dev/null ||
+    printf 'missing: %s (the IC harness new tasks launch on) — install it or change config/crew-harness\n' "$ic_bin"
 
   # Registry drift: every clone needs a registry line (an unregistered
   # project cannot take build tasks — delivery modes are Director-confirmed,

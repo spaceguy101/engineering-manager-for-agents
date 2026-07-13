@@ -72,6 +72,7 @@ harness_cmd() {
     codex) printf 'codex --dangerously-bypass-approvals-and-sandbox\n' ;;
     opencode) printf 'opencode --prompt\n' ;;
     pi) printf 'pi\n' ;;
+    cursor) printf '%s --force\n' "$(harness_binary cursor)" ;;
     *) return 1 ;;
   esac
 }
@@ -125,7 +126,7 @@ main() {
 
   harness="$("$EM_BIN/em-harness.sh" resolve "$harness")"
   harness_cmd "$harness" >/dev/null ||
-    die "unknown harness '$harness' (claude|codex|opencode|pi)"
+    die "unknown harness '$harness' (claude|codex|opencode|pi|cursor)"
   if [ -z "${EM_LAUNCH_OVERRIDE:-}" ] && ! harness_verified "$harness"; then
     die "harness '$harness' is unverified on this machine — run a supervised trial task first (AGENTS.md: harness verification), then add it to config/verified-harnesses"
   fi

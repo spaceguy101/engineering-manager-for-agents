@@ -405,7 +405,15 @@ expect "leaves {TASK} for the EM" grep -qF '{TASK}' "$XB"
 
 note "em-harness.sh — detection and resolution"
 expect "env marker detects claude" test "$(env CLAUDECODE=1 "$BIN/em-harness.sh" detect)" = "claude"
+expect "env marker detects cursor" test "$(env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT \
+  -u CODEX_SANDBOX -u CODEX_HOME -u OPENCODE -u OPENCODE_SERVER -u PI_SESSION \
+  CURSOR_AGENT=1 "$BIN/em-harness.sh" detect)" = "cursor"
 expect "per-task request wins" test "$(env CLAUDECODE=1 "$BIN/em-harness.sh" resolve codex)" = "codex"
+expect "harness_binary passes plain names through" test "$(harness_binary claude)" = "claude"
+case "$(harness_binary cursor)" in
+  cursor-agent | agent) ok "harness_binary maps cursor to the agent binary" ;;
+  *) fail "harness_binary maps cursor to the agent binary (got '$(harness_binary cursor)')" ;;
+esac
 mkdir -p "$EM_ROOT/config"
 echo opencode > "$EM_ROOT/config/crew-harness"
 expect "crew-harness override applies" test "$("$BIN/em-harness.sh" resolve)" = "opencode"
@@ -447,6 +455,10 @@ mkdir -p "$EM_ROOT/config"
 echo 'no-such-harness-zz9' > "$EM_ROOT/config/crew-harness"
 out="$("$BIN/em-bootstrap.sh" 2>&1)"
 expect "reports a missing IC harness" grep -q 'missing: no-such-harness-zz9' <<< "$out"
+echo cursor > "$EM_ROOT/config/crew-harness"
+out="$("$BIN/em-bootstrap.sh" 2>&1)"
+expect "cursor check targets the agent binary, never the IDE name" \
+  test -z "$(grep -F 'missing: cursor (' <<< "$out")"
 rm -f "$EM_ROOT/config/crew-harness"
 out="$("$BIN/em-bootstrap.sh" 2>&1)"
 expect "flags an unregistered clone" grep -q 'registry: projects/unreg has no registry line' <<< "$out"
@@ -601,6 +613,18 @@ EOF
   expect "meta records the harness" grep -qx 'harness=codex' "$EM_ROOT/state/tst-x4.meta"
   expect "non-claude spawn installs no claude hook" test ! -e "$WT/tst-x4/.claude"
   expect "teardown accepts --force before the id" "$BIN/em-teardown.sh" --force tst-x4
+  "$BIN/em-brief.sh" tst-x5 demo >/dev/null
+  fill_task tst-x5
+  expect_rc "unverified cursor refused without the trial escape hatch" 1 \
+    env -u EM_LAUNCH_OVERRIDE "$BIN/em-spawn.sh" tst-x5 demo cursor
+  echo cursor > "$EM_ROOT/config/verified-harnesses"
+  expect "verified cursor dispatches" \
+    env -u EM_LAUNCH_OVERRIDE "$BIN/em-spawn.sh" tst-x5 demo cursor
+  expect "meta records harness=cursor" grep -qx 'harness=cursor' "$EM_ROOT/state/tst-x5.meta"
+  expect "cursor launch targets the agent binary with --force" \
+    grep -qE '^launch=(cursor-)?agent --force ' "$EM_ROOT/state/tst-x5.meta"
+  expect "cursor spawn installs no claude hook" test ! -e "$WT/tst-x5/.claude"
+  expect "cursor task tears down cleanly" "$BIN/em-teardown.sh" tst-x5
   rm -f "$EM_ROOT/config/verified-harnesses"
 
   note "em-relaunch.sh — stuck-IC relaunch in place"

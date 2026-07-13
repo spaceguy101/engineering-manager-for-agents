@@ -13,6 +13,7 @@
 #   usage          print the calling script's header comment block
 #   require_id     validate a task id (kebab slug, e.g. fix-login-k3)
 #   window_name    canonical tmux window name for a task: em-<id>
+#   harness_binary executable a harness launches as (cursor → agent)
 #   tmux_cmd       tmux, honoring EM_TMUX_SOCKET (test isolation seam)
 #   inside_tmux    running inside a usable tmux session
 #   create_task_window   new detached window for a task, in the current
@@ -68,6 +69,22 @@ require_id() {
 
 window_name() {
   printf 'em-%s\n' "$1"
+}
+
+# harness_binary <harness> — the executable a harness launches as. Only
+# cursor's differs from the harness name: current installs ship `agent`,
+# older ones `cursor-agent` (never `cursor` — that's the IDE launcher).
+harness_binary() {
+  case "$1" in
+    cursor)
+      if command -v cursor-agent >/dev/null 2>&1; then
+        printf 'cursor-agent\n'
+      else
+        printf 'agent\n'
+      fi
+      ;;
+    *) printf '%s\n' "$1" ;;
+  esac
 }
 
 # tmux, on the isolated test socket when EM_TMUX_SOCKET is set (test-only seam).
