@@ -675,6 +675,40 @@ EOF
   "$BIN/em-teardown.sh" tst-tv1 >/dev/null 2>&1
 fi
 
+# ------------------------------------------------- em-reset: runs dead last
+# (a successful reset empties the sandbox fleet; nothing may run after it)
+note "em-reset.sh — dry run, refusals, then the full factory reset"
+mkdir -p "$EM_ROOT/data" "$EM_ROOT/config"
+echo '# prefs' > "$EM_ROOT/data/director.md"
+echo claude > "$EM_ROOT/config/crew-harness"
+ln -s "$SANDBOX/seed-fs1" "$EM_ROOT/projects/linked"
+out="$("$BIN/em-reset.sh" 2>&1)"
+expect "dry run exits 0" "$BIN/em-reset.sh"
+expect "dry run lists a clone" grep -q 'would remove: projects/demo' <<< "$out"
+expect "dry run marks symlinks as unlink-only" grep -q 'projects/linked (symlink' <<< "$out"
+expect "dry run flags a no-remote clone" grep -q 'projects/loco has no remote' <<< "$out"
+expect "dry run changes nothing" test -d "$EM_ROOT/projects/demo/.git"
+expect_rc "--force without --yes fails plainly" 1 "$BIN/em-reset.sh" --force
+expect_rc "rejects an unknown flag" 1 "$BIN/em-reset.sh" --nope
+fake_meta tst-rs1 demo
+expect_rc "REFUSES (3) with a task in flight" 3 "$BIN/em-reset.sh" --yes
+expect "refusal changes nothing" test -f "$EM_ROOT/state/tst-rs1.meta"
+rm -f "$EM_ROOT/state/tst-rs1.meta"
+expect_rc "REFUSES (3) while work exists nowhere else" 3 "$BIN/em-reset.sh" --yes
+expect "--yes --force resets anyway" "$BIN/em-reset.sh" --yes --force
+expect "projects emptied" test -z "$(ls -A "$EM_ROOT/projects")"
+expect "worktrees emptied" test -z "$(ls -A "$EM_ROOT/worktrees" 2>/dev/null)"
+expect "state emptied (lock and watch files gone)" test -z "$(ls -A "$EM_ROOT/state")"
+expect "task records and registry gone" test ! -e "$EM_ROOT/data/tst-b1" -a ! -e "$EM_ROOT/data/projects.md"
+expect "data/director.md kept" grep -q prefs "$EM_ROOT/data/director.md"
+expect "config kept" test -f "$EM_ROOT/config/crew-harness"
+expect "symlink target untouched" test -d "$SANDBOX/seed-fs1/.git"
+if command -v tmux >/dev/null; then
+  expect_rc "task windows killed" 1 find_window tst-io
+fi
+expect "reset instance reports an idle fleet" grep -q 'no tasks in flight' <("$BIN/em-status.sh" 2>/dev/null)
+expect "second reset finds nothing to do" grep -q 'nothing to reset' <("$BIN/em-reset.sh" 2>&1)
+
 # ------------------------------------------------------------------ summary
 printf '\n%d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
 [ "$FAIL" -eq 0 ]

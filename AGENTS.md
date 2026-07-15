@@ -158,6 +158,14 @@ knowledge dump:
 - Resolve any project's mode/flags with `bin/em-project-mode.sh <name>`.
 - `bin/em-fleet-sync.sh [<name>…]` keeps clones fresh (fetch, clean
   fast-forward, safe prune). Run it for a project after its PR merges.
+- **Factory reset** — only on an explicit Director instruction:
+  `bin/em-reset.sh` (dry run) shows what a full reset would remove, then
+  `--yes` wipes every project, worktree, task record, and piece of fleet
+  state (keeping `data/director.md` and `config/`) so the instance starts
+  from scratch. It REFUSES (exit 3) while any task is in flight or any work
+  exists nowhere else (a no-remote clone, uncommitted changes, unpushed
+  commits); relay the evidence, and add `--force` only when the Director
+  explicitly says to discard that work.
 
 Record every accepted task in `data/backlog.md`:
 
