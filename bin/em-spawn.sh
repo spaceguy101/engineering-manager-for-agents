@@ -3,13 +3,19 @@
 # meta record, then launch the agent with its brief.
 #
 # Usage:
-#   em-spawn.sh <id> <repo> [<harness>] [--research]
+#   em-spawn.sh <id> <repo> [<harness>] [--research] [--surface | --bg]
 #              [--budget <spec>] [--on-exceed pause|kill|warn-only]
 #
 # Requires a filled brief at data/<id>/brief.md (no {TASK} placeholder left).
 # Creates the window in the current tmux session, or in a dedicated 'em'
 # session when running outside tmux. --research records kind=research (the
 # worktree is scratch; teardown requires the report instead).
+#
+# Window visibility is the Director's call, never a guess: --surface brings
+# the new window into view, --bg leaves it in background. Without a flag the
+# standing policy in config/ic-window applies (surface|bg); a policy of
+# `ask` — or no recorded policy at all — makes spawn refuse until the EM has
+# asked the Director and passes an explicit flag.
 #
 # Spawn is the budget guarantee point (BUD-4): --budget here overrides a
 # brief-time declaration (and appends a Budget note to the brief); without
@@ -114,11 +120,15 @@ verify_launch() {
 }
 
 main() {
-  local id="" repo="" harness="" kind=build budget_spec="" on_exceed=""
+  local id="" repo="" harness="" kind=build budget_spec="" on_exceed="" visibility=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h | --help) usage; exit 0 ;;
       --research) kind=research ;;
+      --surface | --bg)
+        [ -z "$visibility" ] || die "--surface and --bg are mutually exclusive"
+        visibility="${1#--}"
+        ;;
       --budget)
         [ $# -ge 2 ] || die "--budget needs a value (e.g. wall=45m,tokens=1.5M)"
         shift
@@ -153,6 +163,20 @@ main() {
     die "unknown harness '$harness' (claude|codex|opencode|pi|cursor)"
   if [ -z "${EM_LAUNCH_OVERRIDE:-}" ] && ! harness_verified "$harness"; then
     die "harness '$harness' is unverified on this machine — run a supervised trial task first (AGENTS.md: harness verification), then add it to config/verified-harnesses"
+  fi
+
+  # Window visibility: explicit flag > standing policy. `ask` (or nothing
+  # recorded) is a Director question, not a default — refuse to guess.
+  if [ -z "$visibility" ]; then
+    local policy
+    if ! policy="$(ic_window_policy)"; then
+      die "no window policy recorded — ask the Director how IC windows should appear (ask each dispatch | surface always | background always), record ask|surface|bg in config/ic-window, or pass --surface/--bg"
+    fi
+    case "$policy" in
+      surface | bg) visibility="$policy" ;;
+      ask) die "window policy is 'ask' — ask the Director whether to surface this IC's window or run it in background, then pass --surface or --bg" ;;
+      *) die "invalid window policy '$policy' in config/ic-window (want ask|surface|bg)" ;;
+    esac
   fi
 
   local brief="$EM_DATA/$id/brief.md"
@@ -240,12 +264,17 @@ EOF
   target="$(find_window "$id")" || die "window $win vanished after creation"
   tmux_cmd send-keys -t "$target" -l -- "$launch"
   tmux_cmd send-keys -t "$target" Enter
+  if [ "$visibility" = "surface" ]; then
+    surface_task_window "$target" || warn "could not surface window $win"
+    inside_tmux ||
+      log "surfaced in the detached 'em' session — view it with: tmux attach -t em"
+  fi
 
   log "spawned $id in window $win"
   emit_event "$id" ic_spawned --actor em \
-    --data "$(jq -cn --arg h "$harness" --arg w "$win" \
+    --data "$(jq -cn --arg h "$harness" --arg w "$win" --arg v "$visibility" \
       --argjson b "$(jq -c '.limits' "$bj" 2>/dev/null || printf 'null')" \
-      '{harness: $h, window: $w, budget: $b}' 2>/dev/null || true)"
+      '{harness: $h, window: $w, surfaced: ($v == "surface"), budget: $b}' 2>/dev/null || true)"
   verify_launch "$id" "$target"
   printf '%s\n' "$wt"
 }
