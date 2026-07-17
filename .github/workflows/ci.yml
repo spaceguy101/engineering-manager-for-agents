@@ -8,13 +8,17 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install toolchain
         run: sudo apt-get update && sudo apt-get install -y shellcheck tmux jq
 
       - name: shellcheck
-        run: shellcheck bin/em-*.sh bin/lib/*.sh bin/lib/*/*.sh tests/run.sh
+        # -x follows sourced files via each script's `# shellcheck source=`
+        # directive. Without it, older shellcheck (apt ships 0.9.0) emits
+        # SC1091 for the dynamic `source "$(dirname …)/lib/common.sh"` line
+        # and exits 1, even though the directive names the real path.
+        run: shellcheck -x bin/em-*.sh bin/lib/*.sh bin/lib/*/*.sh tests/run.sh
 
       - name: tests
         run: bash tests/run.sh
