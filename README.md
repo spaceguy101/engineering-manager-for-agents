@@ -66,6 +66,26 @@ repositories into `projects/` (the EM can do this for you).
   an IC work, attach to its tmux window (`tmux attach -t em` when the fleet
   runs in the dedicated background session).
 
+### Task timeline
+
+Every task writes an append-only audit log
+(`state/tasks/<project>/<task>/events.jsonl`) from brief to teardown — one
+JSON event per lifecycle moment, kept after the task closes.
+`bin/em-timeline.sh <task>` renders it:
+
+```
+14:32:07  task_created      (em)      kind=build  mode=gated
+14:32:09  brief_written     (em)      template=brief-build.md
+14:32:11  ic_spawned        (em)      harness=claude  window=em-fix-login-k3
+15:01:44  gate_failed       (ic)      failed=test
+15:09:30  pr_opened         (em)      url=https://github.com/o/r/pull/41
+```
+
+`--errors-only` filters to failures and stalls, `--follow` tails a running
+task, `--json` is the raw stream, and `--since <iso|epoch>` bounds it. The
+log is the durable record for post-mortems and dashboards; deleting it takes
+an explicit `em-teardown.sh --purge-logs` (or a factory reset).
+
 ## Status
 
 **v1 is feature-complete** (all four PRD milestones):

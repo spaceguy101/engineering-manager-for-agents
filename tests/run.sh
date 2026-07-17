@@ -347,6 +347,12 @@ expect "shows kind/mode" grep -q 'build/direct-PR' <<< "$out"
 expect "shows the last status line" grep -q 'working: poking around' <<< "$out"
 expect "window reported dead" grep -q 'dead' <<< "$out"
 expect "shows the armed PR" grep -q 'pull/9' <<< "$out"
+expect "EVENT column header present" grep -q ' EVENT ' <<< "$out"
+expect "no audit log yet: EVENT column shows -" \
+  grep -qE 'tst-st1 +demo +build/direct-PR +dead +- ' <<< "$out"
+"$BIN/em-log-event.sh" tst-st1 ic_spawned --actor em
+expect "EVENT column shows the last event with its age" \
+  grep -qE 'tst-st1 .* ic_spawned\+[0-9]+s ' <("$BIN/em-status.sh" 2>/dev/null)
 rm -f "$EM_ROOT/state/tst-st1".*
 
 note "em-dashboard.sh — Director live view (single frame)"
@@ -364,13 +370,22 @@ touch "$EM_ROOT/state/.last-watcher-beat"
 expect "supervision active with a fresh beacon" \
   grep -q 'supervision: active' <("$BIN/em-dashboard.sh" --once 2>/dev/null)
 expect_rc "no attach hint without the em session" 1 grep -q 'tmux attach' <<< "$out"
+expect "colorize: dead pane turns red (forced color)" \
+  grep -q $'\033\[31m.*tst-db1' <(EM_DASHBOARD_COLOR=1 "$BIN/em-dashboard.sh" --once 2>/dev/null)
 if command -v tmux >/dev/null; then
   tmux_cmd new-session -d -s em -c "$EM_ROOT" 2>/dev/null || true
   expect "frame hints at tmux attach when the em session exists" \
     grep -q 'tmux attach -t em' <("$BIN/em-dashboard.sh" --once 2>/dev/null)
+  # A live pane makes the row idle, so the attention tint must come from the
+  # status column — this pins colorize's field index against column drift.
+  tmux_cmd new-window -d -t '=em:' -n em-tst-db1 -c "$SANDBOX"
+  expect "colorize: attention status turns yellow (column-shift pin)" \
+    grep -q $'\033\[33m.*blocked: gate failing' \
+    <(EM_DASHBOARD_COLOR=1 "$BIN/em-dashboard.sh" --once 2>/dev/null)
   tmux_cmd kill-session -t '=em' 2>/dev/null
 else
   skip "tmux not installed — dashboard attach-hint case skipped"
+  skip "tmux not installed — dashboard yellow-tint case skipped"
 fi
 expect_rc "rejects an unknown flag" 1 "$BIN/em-dashboard.sh" --nope
 expect_rc "rejects a bad interval" 1 "$BIN/em-dashboard.sh" --interval xx --once
@@ -710,6 +725,9 @@ EOF
   expect_rc "teardown REFUSES (3) while unlanded work exists" 3 "$BIN/em-teardown.sh" tst-s1
   expect "refusal keeps the window alive" find_window tst-s1
   expect "refusal keeps the meta record" test -f "$META"
+  expect_rc "refused teardown never purges (--purge-logs)" 3 "$BIN/em-teardown.sh" tst-s1 --purge-logs
+  expect "audit log intact after the refused purge" \
+    test -s "$EM_ROOT/state/tasks/demo/tst-s1/events.jsonl"
   rm "$WT/tst-s1/scratch.txt"
   expect "teardown succeeds once the worktree is clean" "$BIN/em-teardown.sh" tst-s1
   expect "worktree removed" test ! -e "$WT/tst-s1"
@@ -786,7 +804,9 @@ EOF
   expect "relaunch never logs a second ic_spawned (wall-clock anchor)" \
     test "$(grep -c '"event":"ic_spawned"' "$RLEV")" = 1
   expect_rc "relaunch of an unknown task fails" 1 "$BIN/em-relaunch.sh" tst-zz
-  "$BIN/em-teardown.sh" tst-rl1 >/dev/null 2>&1
+  "$BIN/em-teardown.sh" tst-rl1 --purge-logs >/dev/null 2>&1
+  expect "--purge-logs removes the audit log after a clean teardown" \
+    test ! -e "$EM_ROOT/state/tasks/demo/tst-rl1"
 
   note "em-status.sh — default busy regex covers cursor's working indicator"
   cat > "$SANDBOX/fakebin/cursorish" <<'EOF'

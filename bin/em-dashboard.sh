@@ -16,8 +16,9 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
 COLOR=0
 
 # Tint the status table when on a terminal: red for a dead pane, yellow for
-# a task waiting on attention. Field 4 is PANE, field 5 starts LAST STATUS
-# (ids/projects/kind-mode never contain spaces).
+# a task waiting on attention. Field 4 is PANE, field 5 is EVENT, field 6
+# starts LAST STATUS (ids/projects/kind-mode/event cells never contain
+# spaces).
 colorize() {
   if [ "$COLOR" -ne 1 ]; then
     cat
@@ -26,7 +27,7 @@ colorize() {
   awk '
     NR == 1 { print; next }
     $4 == "dead" { printf "\033[31m%s\033[0m\n", $0; next }
-    $5 ~ /^(blocked|failed|needs-decision):/ { printf "\033[33m%s\033[0m\n", $0; next }
+    $6 ~ /^(blocked|failed|needs-decision):/ { printf "\033[33m%s\033[0m\n", $0; next }
     { print }'
 }
 
@@ -92,6 +93,9 @@ main() {
     *[!0-9]* | '' | 0) die "interval must be a positive integer, got '$interval'" ;;
   esac
   [ -t 1 ] && COLOR=1
+  # Test-only seam (like EM_TMUX_SOCKET): force color without a tty so the
+  # colorize field indices stay pinned by the suite.
+  [ "${EM_DASHBOARD_COLOR:-}" = 1 ] && COLOR=1
 
   if [ "$once" -eq 1 ]; then
     render

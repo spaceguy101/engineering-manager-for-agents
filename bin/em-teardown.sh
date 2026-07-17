@@ -3,7 +3,7 @@
 # clear volatile state. Keeps data/<id>/ (brief/report are durable).
 #
 # Usage:
-#   em-teardown.sh <id> [--force]
+#   em-teardown.sh <id> [--force] [--purge-logs]
 #
 # Build tasks: REFUSES (exit 3) if the worktree holds unlanded work
 # (ADR-0002, via em-worktree.sh remove) — treat a refusal as
@@ -12,18 +12,22 @@
 # Research tasks (kind=research in meta): the worktree is declared scratch —
 # teardown requires only that data/<id>/report.md exists, and REFUSES (exit
 # 3) without it.
+# The task's audit log (state/tasks/<project>/<id>/) is kept by default;
+# --purge-logs removes it after a successful teardown only — a refused
+# teardown never purges anything.
 set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
 "$EM_BIN/em-guard.sh"
 
 main() {
-  local id="" force="" arg
+  local id="" force="" purge_logs=0 arg
   for arg in "$@"; do
     case "$arg" in
       -h | --help) usage; exit 0 ;;
       --force) force="--force" ;;
-      -*) die "unknown option '$arg' (only --force)" ;;
+      --purge-logs) purge_logs=1 ;;
+      -*) die "unknown option '$arg' (only --force, --purge-logs)" ;;
       *)
         [ -z "$id" ] || { usage >&2; exit 1; }
         id="$arg"
@@ -72,6 +76,8 @@ main() {
 
   # Events before the meta goes (the writer resolves the project from it).
   # The rm glob never touches state/tasks/ — event logs are retained.
+  local project
+  project="$(meta_get "$id" project 2>/dev/null || true)"
   if [ "$kind" = "research" ] && [ -s "$EM_DATA/$id/report.md" ]; then
     emit_event "$id" report_delivered --actor em \
       --data "$(jq -cn --arg r "data/$id/report.md" '{report: $r}' 2>/dev/null || true)"
@@ -80,6 +86,14 @@ main() {
   emit_event "$id" task_closed --actor em
 
   rm -f "$EM_STATE/$id".* "$EM_STATE/.watch."*".$id"
+  if [ "$purge_logs" -eq 1 ]; then
+    if [ -n "$project" ]; then
+      rm -rf "$(task_dir "$id" "$project")"
+      log "purged the audit log of $id"
+    else
+      warn "cannot resolve project for $id — audit log not purged"
+    fi
+  fi
   log "teardown of $id complete (data/$id/ kept)"
 }
 

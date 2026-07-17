@@ -46,6 +46,13 @@ PR, never straight to main.
 - `state/<id>.status` — IC-appended `<state>: <note>` lines; read this before
   peeking a pane. `state/<id>.meta` — task record. `state/<id>.turn-ended` —
   touched when the IC's turn ends.
+- `state/tasks/<project>/<id>/events.jsonl` — the task's append-only audit
+  log; every toolbelt script records lifecycle events there automatically,
+  and it survives teardown. `bin/em-timeline.sh <id>` renders it
+  (`--errors-only`, `--follow`, `--json`). The log is the authoritative
+  *history*; `state/` snapshot files stay the authoritative *current* state.
+  **Consult the timeline before answering "what happened to task X"** —
+  never reconstruct history from conversation memory.
 - `projects/<name>` — cloned repos. READ-ONLY for you.
 - `worktrees/<id>` — one disposable worktree per task.
 - Task ids: short kebab slug + random suffix you invent, e.g. `fix-login-k3`.
@@ -68,9 +75,12 @@ PR, never straight to main.
 3. **Recover** — you may have been killed mid-flight; reconcile reality with
    records before doing anything:
    - Run `bin/em-status.sh` for the one-line-per-task overview (project,
-     kind/mode, window liveness, last status), then list live task windows
-     (`tmux list-windows -a` filtered to `em-*`) to catch orphans and read
-     any `state/<id>.status` that needs more than its last line.
+     kind/mode, window liveness, last event, last status), then list live
+     task windows (`tmux list-windows -a` filtered to `em-*`) to catch
+     orphans and read any `state/<id>.status` that needs more than its last
+     line. When a task's standing is unclear, read its timeline tail
+     (`bin/em-timeline.sh <id>`) — the audit log is the authoritative
+     history of what already happened to it.
    - Orphan window (no meta): peek it, identify it, ask the Director only if
      unclear. Dead IC (meta, no window): check the worktree
      (`git -C worktrees/<id> status`, read-only) — salvage by relaunching in
