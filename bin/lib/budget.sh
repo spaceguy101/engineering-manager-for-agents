@@ -35,10 +35,12 @@ budget_path() { # <id> <project>
 
 # budget_conf_get <key> — value from config/budgets.conf (key=value lines:
 # budget=, soft_pct=, on_exceed=, grace_seconds=, usd_per_mtok_<harness>=).
+# Splits on the first '=' only — budget specs contain '=' themselves.
 budget_conf_get() {
   local f="$EM_CONFIG/budgets.conf" v
   [ -f "$f" ] || return 1
-  v="$(awk -F= -v k="$1" '$1 == k { print $2; exit }' "$f" | tr -d '[:space:]')"
+  v="$(awk -v k="$1" 'index($0, k "=") == 1 { print substr($0, length(k) + 2); exit }' "$f" |
+    tr -d '[:space:]')"
   [ -n "$v" ] || return 1
   printf '%s\n' "$v"
 }
@@ -299,13 +301,94 @@ pause_adapter() { # <id>
 pause_task() { "$(pause_adapter "$1")" pause "$1"; }
 resume_task() { "$(pause_adapter "$1")" resume "$1"; }
 
+# _budget_nudge <id> <line> — one in-band line to the IC pane; best-effort
+# (silently skipped when the window is gone).
+_budget_nudge() {
+  "$EM_BIN/em-send.sh" "$1" "$2" >/dev/null 2>&1 || true
+}
+
+# _budget_soft <id> <project> <dim> <pct> <used_h> <limit_h> — warn once per
+# dimension: log budget_warning, latch, nudge the IC (BUD-6).
+_budget_soft() {
+  local id="$1" project="$2" dim="$3" pct="$4" du="$5" dl="$6" bj warned data
+  bj="$(budget_path "$id" "$project")"
+  warned="$(jq -r ".warned.$dim // false" "$bj" 2>/dev/null)" || warned=true
+  [ "$warned" != "true" ] || return 0
+  data="$(jq -cn --arg d "$dim" --argjson p "$pct" --arg u "$du" --arg l "$dl" \
+    '{dimension: $d, pct: $p, used: $u, limit: $l}' 2>/dev/null)"
+  emit_event "$id" budget_warning --actor watcher --data "$data"
+  budget_update "$id" "$project" ".warned.$dim = true" || true
+  _budget_nudge "$id" "EM notice: you have used ~${pct}% of your $dim budget — wrap up or report a checkpoint now."
+}
+
+# _budget_enforce <id> <project> <dim> <used_h> <limit_h> <now> — the hard
+# threshold: research tasks on the default pause action get a grace window
+# to deliver the report first (BUD-10); everything else acts per on_exceed.
+# Prints the wake reason line. Enforcement never touches the worktree.
+_budget_enforce() {
+  local id="$1" project="$2" dim="$3" du="$4" dl="$5" now="$6"
+  local bj action kind data outcome
+  bj="$(budget_path "$id" "$project")"
+  action="$(jq -r '.on_exceed // "pause"' "$bj" 2>/dev/null)" || action=pause
+  kind="$(meta_get "$id" kind 2>/dev/null || printf 'build')"
+
+  if [ "$action" = "pause" ] && [ "$kind" = "research" ]; then
+    local grace
+    grace="$(budget_conf_get grace_seconds 2>/dev/null || printf '300')"
+    case "$grace" in '' | *[!0-9]*) grace=300 ;; esac
+    data="$(jq -cn --arg d "$dim" --arg u "$du" --arg l "$dl" \
+      '{dimension: $d, used: $u, limit: $l, action: "grace"}' 2>/dev/null)"
+    emit_event "$id" budget_exceeded --actor watcher --data "$data"
+    # shellcheck disable=SC2016  # $g is a jq variable
+    budget_update "$id" "$project" '.state = "grace" | .grace_until = $g' \
+      --argjson g "$((now + grace))" || true
+    _budget_nudge "$id" "EM notice: your $dim budget is exhausted — write the report now with what you have."
+    printf 'budget %s: %s exceeded — report demanded (grace %ss)\n' "$id" "$dim" "$grace"
+    return 0
+  fi
+
+  data="$(jq -cn --arg d "$dim" --arg u "$du" --arg l "$dl" --arg a "$action" \
+    '{dimension: $d, used: $u, limit: $l, action: $a}' 2>/dev/null)"
+  emit_event "$id" budget_exceeded --actor watcher --data "$data"
+  case "$action" in
+    kill)
+      local target
+      if target="$(find_window "$id")"; then
+        tmux_cmd kill-window -t "$target" 2>/dev/null || true
+      fi
+      emit_event "$id" task_killed --actor watcher --data "$data"
+      budget_update "$id" "$project" '.state = "killed"' || true
+      outcome=killed
+      ;;
+    warn-only)
+      budget_update "$id" "$project" '.state = "exceeded"' || true
+      outcome=warn-only
+      ;;
+    *)
+      if pause_task "$id" 2>/dev/null; then
+        emit_event "$id" task_paused --actor watcher --data "$data"
+        budget_update "$id" "$project" '.state = "paused"' || true
+        outcome=paused
+      else
+        budget_update "$id" "$project" '.state = "exceeded"' || true
+        outcome=pause-failed
+      fi
+      ;;
+  esac
+  printf 'budget %s: %s exceeded — %s (%s/%s)\n' "$id" "$dim" "$outcome" "$du" "$dl"
+}
+
 # budget_pass <id> <now> — one metering/enforcement pass, called by the
 # watcher on every poll and rate-limited by state/.watch.budget.<id>
-# (EM_BUDGET_INTERVAL, default 60s). Caches spend into budget.json, warns
-# once at the soft threshold, enforces at the hard threshold per on_exceed,
-# and prints the wake reason line:
-#   budget <id>: wall exceeded — <paused|killed|warn-only|pause-failed> (<used>/<limit>)
-# Prints nothing otherwise. Enforcement never touches the worktree.
+# (EM_BUDGET_INTERVAL, default 60s). Meters wall-clock (always) and
+# tokens/cost (when a bin/lib/meter/<harness>.sh adapter exists), caches
+# spend into budget.json, warns+nudges once per dimension at the soft
+# threshold, enforces at the hard threshold per on_exceed, and prints the
+# wake reason line:
+#   budget <id>: <dim> exceeded — <paused|killed|warn-only|pause-failed> (<used>/<limit>)
+#   budget <id>: <dim> exceeded — report demanded (grace <n>s)   (research)
+#   budget <id>: grace expired — paused
+# Prints nothing otherwise.
 budget_pass() {
   local id="$1" now="$2" project bj stamp last interval
   project="$(meta_get "$id" project 2>/dev/null)" || return 0
@@ -320,64 +403,93 @@ budget_pass() {
   [ $((now - last)) -ge "$interval" ] || return 0
   printf '%s\n' "$now" > "$stamp"
 
-  local state limit
+  local state
   state="$(jq -r '.state // "ok"' "$bj" 2>/dev/null)" || return 0
+  if [ "$state" = "grace" ]; then
+    local gu
+    gu="$(jq -r '.grace_until // 0' "$bj" 2>/dev/null)" || gu=0
+    [ "$now" -ge "$gu" ] || return 0
+    if pause_task "$id" 2>/dev/null; then
+      emit_event "$id" task_paused --actor watcher \
+        --data '{"action": "pause", "reason": "grace expired"}'
+      budget_update "$id" "$project" '.state = "paused"' || true
+      printf 'budget %s: grace expired — paused\n' "$id"
+    else
+      budget_update "$id" "$project" '.state = "exceeded"' || true
+      printf 'budget %s: grace expired — pause failed\n' "$id"
+    fi
+    return 0
+  fi
   [ "$state" = "ok" ] || return 0 # already latched: never re-fire
-  limit="$(jq -r '.limits.wall_seconds // empty' "$bj" 2>/dev/null)" || return 0
-  [ -n "$limit" ] || return 0 # unmetered
+
+  local limit_w limit_t limit_c
+  limit_w="$(jq -r '.limits.wall_seconds // empty' "$bj" 2>/dev/null)" || limit_w=""
+  limit_t="$(jq -r '.limits.tokens // empty' "$bj" 2>/dev/null)" || limit_t=""
+  limit_c="$(jq -r '.limits.cost_usd // empty' "$bj" 2>/dev/null)" || limit_c=""
+  [ -n "$limit_w$limit_t$limit_c" ] || return 0 # unmetered
 
   local used
   used="$(budget_elapsed_seconds "$id" "$project" "$now")"
   # shellcheck disable=SC2016  # $u is a jq variable
   budget_update "$id" "$project" '.spend.wall_seconds = $u' --argjson u "$used" || true
 
-  local fu fl data
-  fu="$(fmt_duration "$used")"
-  fl="$(fmt_duration "$limit")"
-  if [ "$used" -ge "$limit" ]; then
-    local action outcome
-    action="$(jq -r '.on_exceed // "pause"' "$bj" 2>/dev/null)"
-    data="$(jq -cn --argjson u "$used" --argjson l "$limit" --arg a "$action" \
-      '{dimension: "wall", used_seconds: $u, limit_seconds: $l, action: $a}' 2>/dev/null)"
-    emit_event "$id" budget_exceeded --actor watcher --data "$data"
-    case "$action" in
-      kill)
-        local target
-        if target="$(find_window "$id")"; then
-          tmux_cmd kill-window -t "$target" 2>/dev/null || true
-        fi
-        emit_event "$id" task_killed --actor watcher --data "$data"
-        budget_update "$id" "$project" '.state = "killed"' || true
-        outcome=killed
-        ;;
-      warn-only)
-        budget_update "$id" "$project" '.state = "exceeded"' || true
-        outcome=warn-only
-        ;;
-      *)
-        if pause_task "$id" 2>/dev/null; then
-          emit_event "$id" task_paused --actor watcher --data "$data"
-          budget_update "$id" "$project" '.state = "paused"' || true
-          outcome=paused
-        else
-          budget_update "$id" "$project" '.state = "exceeded"' || true
-          outcome=pause-failed
-        fi
-        ;;
-    esac
-    printf 'budget %s: wall exceeded — %s (%s/%s)\n' "$id" "$outcome" "$fu" "$fl"
+  # Tokens/cost via the harness's meter adapter (BUD-β; unmeterable without
+  # one — wall-clock still enforces).
+  local harness adapter tokens="" cost=""
+  harness="$(meta_get "$id" harness 2>/dev/null || true)"
+  adapter="$EM_BIN/lib/meter/${harness:-none}.sh"
+  if [ -x "$adapter" ]; then
+    tokens="$("$adapter" "$id" 2>/dev/null)" || tokens=""
+    case "$tokens" in *[!0-9]*) tokens="" ;; esac
+  fi
+  if [ -n "$tokens" ]; then
+    local rate
+    if rate="$(budget_conf_get "usd_per_mtok_${harness:-none}" 2>/dev/null)"; then
+      cost="$(awk -v t="$tokens" -v r="$rate" 'BEGIN { printf "%.4f", t / 1000000 * r }')"
+    fi
+    # shellcheck disable=SC2016  # $t/$c are jq variables
+    budget_update "$id" "$project" \
+      '.spend.tokens = $t | .unmeterable = [] |
+       .spend.cost_usd = (if $c == "" then .spend.cost_usd else ($c | tonumber) end)' \
+      --argjson t "$tokens" --arg c "$cost" || true
+  fi
+
+  # Hard thresholds — the first exceeded dimension enforces.
+  if [ -n "$limit_w" ] && [ "$used" -ge "$limit_w" ]; then
+    _budget_enforce "$id" "$project" wall \
+      "$(fmt_duration "$used")" "$(fmt_duration "$limit_w")" "$now"
+    return 0
+  fi
+  if [ -n "$limit_t" ] && [ -n "$tokens" ] && [ "$tokens" -ge "$limit_t" ]; then
+    _budget_enforce "$id" "$project" tokens \
+      "$(fmt_tokens "$tokens")" "$(fmt_tokens "$limit_t")" "$now"
+    return 0
+  fi
+  if [ -n "$limit_c" ] && [ -n "$cost" ] &&
+    awk -v c="$cost" -v l="$limit_c" 'BEGIN { exit !(c + 0 >= l + 0) }'; then
+    _budget_enforce "$id" "$project" cost \
+      "\$$(awk -v c="$cost" 'BEGIN { printf "%.2f", c }')" "\$$limit_c" "$now"
     return 0
   fi
 
-  local soft warned pct
-  soft="$(jq -r '.soft_pct // 80' "$bj" 2>/dev/null)"
-  warned="$(jq -r '.warned.wall // false' "$bj" 2>/dev/null)"
-  pct=$((used * 100 / limit))
-  if [ "$pct" -ge "$soft" ] && [ "$warned" != "true" ]; then
-    data="$(jq -cn --argjson u "$used" --argjson l "$limit" --argjson p "$pct" \
-      '{dimension: "wall", used_seconds: $u, limit_seconds: $l, pct: $p}' 2>/dev/null)"
-    emit_event "$id" budget_warning --actor watcher --data "$data"
-    budget_update "$id" "$project" '.warned.wall = true' || true
+  # Soft thresholds (once per dimension).
+  local soft pct
+  soft="$(jq -r '.soft_pct // 80' "$bj" 2>/dev/null)" || soft=80
+  case "$soft" in '' | *[!0-9]*) soft=80 ;; esac
+  if [ -n "$limit_w" ]; then
+    pct=$((used * 100 / limit_w))
+    [ "$pct" -lt "$soft" ] || _budget_soft "$id" "$project" wall "$pct" \
+      "$(fmt_duration "$used")" "$(fmt_duration "$limit_w")"
+  fi
+  if [ -n "$limit_t" ] && [ -n "$tokens" ]; then
+    pct=$((tokens * 100 / limit_t))
+    [ "$pct" -lt "$soft" ] || _budget_soft "$id" "$project" tokens "$pct" \
+      "$(fmt_tokens "$tokens")" "$(fmt_tokens "$limit_t")"
+  fi
+  if [ -n "$limit_c" ] && [ -n "$cost" ]; then
+    pct="$(awk -v c="$cost" -v l="$limit_c" 'BEGIN { printf "%d", c * 100 / l }')"
+    [ "$pct" -lt "$soft" ] || _budget_soft "$id" "$project" cost "$pct" \
+      "\$$(awk -v c="$cost" 'BEGIN { printf "%.2f", c }')" "\$$limit_c"
   fi
   return 0
 }

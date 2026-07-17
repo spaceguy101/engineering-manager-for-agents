@@ -215,7 +215,13 @@ entries — PRs, local main, and report files are the durable record.
    is a sensible default for routine tasks (units: `s`/`m`/`h`; also
    `tokens=1.5M`, `cost=2.00`); a budget can equally be declared at brief
    time (`em-brief.sh --budget`), and the IC sees its envelope in the brief.
-   An unbudgeted dispatch runs unmetered after a one-time notice event.
+   Without a task budget, dispatch falls back to the project default
+   (`em-project-add.sh --budget`, stored in `data/projects/<name>/budget`)
+   then the global default (`budget=` in `config/budgets.conf`); only with
+   none of those does the task run unmetered, after a one-time notice
+   event. Token/cost limits meter only on harnesses with a meter adapter
+   (claude ships one; the rest enforce wall-clock only and show
+   `tokens: unmeterable` in `em-budget.sh show`).
    Spawn checks the pane ~5s after launch and prints a hint if a trust or
    bypass-permissions dialog is waiting — act on it (see harness notes).
    Still `bin/em-peek.sh <id>` within ~20s to confirm the IC is processing.
@@ -290,8 +296,13 @@ Handle wakes cheapest-first:
   kill) and act only on their word — `bin/em-budget.sh extend <id>
   wall=+30m` raises the limit and resumes a paused IC. Enforcement never
   destroys work: worktree, branch, and window (except `kill`) are
-  untouched. The soft threshold (80%) only logs `budget_warning` and turns
-  the status column loud (`!`) — no wake, no Director report.
+  untouched. The soft threshold (80%) only logs `budget_warning`, turns
+  the status column loud (`!`), and sends the IC a one-line wrap-up nudge —
+  no wake, no Director report. Research tasks get a grace window first:
+  `budget <id>: <dim> exceeded — report demanded (grace <n>s)` means the IC
+  was told to write the report now; `budget <id>: grace expired — paused`
+  follows if nobody extends — read the partial `data/<id>/report.md` before
+  deciding.
 - `heartbeat` — mandatory full-fleet review: start with `bin/em-status.sh`
   (one line per task: window liveness + last status), read any status file
   or peek any pane that looks off, check PR-ready tasks, reconcile the

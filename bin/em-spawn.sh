@@ -204,21 +204,33 @@ launch=$launch
 spawned=$(date +%Y-%m-%dT%H:%M:%S)
 EOF
 
-  # Budget guarantee point (BUD-4): every dispatched task has a snapshot.
-  local bj
+  # Budget guarantee point (BUD-4/BUD-2): task override → brief-time
+  # declaration → project default → global default → unlimited + notice.
+  local bj oe_effective="$on_exceed"
   bj="$(budget_path "$id" "$repo")"
+  if [ -z "$oe_effective" ]; then
+    oe_effective="$(budget_conf_get on_exceed 2>/dev/null || printf 'pause')"
+    case "$oe_effective" in pause | kill | warn-only) ;; *) oe_effective=pause ;; esac
+  fi
   if [ -n "$budget_spec" ]; then
     local parsed
-    parsed="$(declare_budget "$id" "$repo" "$budget_spec" task "${on_exceed:-pause}")" ||
+    parsed="$(declare_budget "$id" "$repo" "$budget_spec" task "$oe_effective")" ||
       die "invalid --budget '$budget_spec' (want e.g. wall=45m,tokens=1.5M,cost=2.00)"
     if ! grep -q '^## Budget' "$brief"; then
       printf '\n## Budget (declared at dispatch)\n\nThis task has a resource envelope: %s.\nPrefer the smallest correct change that meets the brief. At 80%% of any limit\nyou will be warned in this window; at 100%% enforcement kicks in.\n' \
         "$(budget_phrase "$parsed")" >> "$brief"
     fi
   elif [ ! -f "$bj" ]; then
-    write_budget_json "$id" "$repo" "" "" "" none "${on_exceed:-pause}"
-    emit_event "$id" budget_warning --actor em \
-      --data '{"reason": "unmetered", "note": "task dispatched without a budget"}'
+    local def
+    if def="$(resolve_default_budget_spec "$repo")"; then
+      declare_budget "$id" "$repo" "${def% *}" "${def##* }" "$oe_effective" >/dev/null ||
+        warn "default budget '${def% *}' is malformed — fix data/projects/$repo/budget or config/budgets.conf; task runs unmetered"
+    fi
+    if [ ! -f "$bj" ]; then
+      write_budget_json "$id" "$repo" "" "" "" none "$oe_effective"
+      emit_event "$id" budget_warning --actor em \
+        --data '{"reason": "unmetered", "note": "task dispatched without a budget"}'
+    fi
   elif [ -n "$on_exceed" ]; then
     budget_update "$id" "$repo" ".on_exceed = \"$on_exceed\"" || true
   fi

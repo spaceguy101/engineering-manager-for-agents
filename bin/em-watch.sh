@@ -11,6 +11,12 @@
 #                           budget enforcement fired (action: paused, killed,
 #                           warn-only, or pause-failed); report to the
 #                           Director with the figures and a recommendation
+#   budget <id>: <dim> exceeded — report demanded (grace <n>s)
+#                           a research task hit its limit: the IC was told to
+#                           write the report now, and pauses after the grace
+#   budget <id>: grace expired — paused
+#                           the grace ran out with no extension — the IC is
+#                           paused; read data/<id>/report.md for partials
 #   signal <id> [<id>…]     new status line(s); read the listed status files
 #   stale <id>              IC's turn ended without a status report; peek it
 #   check <id>: <output>    the task's state/<id>.check.sh fired; act on it

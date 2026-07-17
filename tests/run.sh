@@ -704,6 +704,71 @@ expect "spend cached for cheap display" \
   jq -e '.spend.wall_seconds >= 85' "$TASKS/demo/tst-sw1/budget.json"
 rm -f "$EM_ROOT/state/tst-sw1.meta"
 
+note "budgets — claude token meter adapter (BUD-β)"
+export EM_CLAUDE_SESSIONS_DIR="$SANDBOX/claude-sessions"
+fake_meta tst-tk1 demo
+printf 'harness=claude\n' >> "$EM_ROOT/state/tst-tk1.meta"
+munged="$(printf '%s' "$EM_ROOT/worktrees/tst-tk1" | tr -c '[:alnum:]' '-')"
+mkdir -p "$EM_CLAUDE_SESSIONS_DIR/$munged"
+cat > "$EM_CLAUDE_SESSIONS_DIR/$munged/s1.jsonl" <<'EOF'
+{"type":"assistant","message":{"usage":{"input_tokens":10,"output_tokens":40,"cache_read_input_tokens":9999,"cache_creation_input_tokens":5000}}}
+{"type":"user","message":{"role":"user"}}
+garbage not json
+{"type":"assistant","message":{"usage":{"input_tokens":20,"output_tokens":30}}}
+EOF
+expect "meter sums assistant input+output, skips cache and garbage" \
+  test "$("$BIN/lib/meter/claude.sh" tst-tk1)" = 100
+fake_meta tst-tk2 demo
+mkdir -p "$EM_CLAUDE_SESSIONS_DIR/$(printf '%s' "$EM_ROOT/worktrees/tst-tk2" | tr -c '[:alnum:]' '-')"
+expect "empty session dir meters 0" test "$("$BIN/lib/meter/claude.sh" tst-tk2)" = 0
+fake_meta tst-tk3 demo
+expect_rc "missing session dir is unmeterable (1)" 1 "$BIN/lib/meter/claude.sh" tst-tk3
+
+note "budgets — token and cost enforcement via the meter (BUD-β)"
+write_budget_json tst-tk1 demo "" 80 "" task warn-only
+out="$(budget_pass tst-tk1 "$(date +%s)")"
+expect "token hard threshold fires" \
+  test "$out" = "budget tst-tk1: tokens exceeded — warn-only (100/80)"
+expect "token spend cached and unmeterable cleared" \
+  jq -e '.spend.tokens == 100 and (.unmeterable | length) == 0' "$TASKS/demo/tst-tk1/budget.json"
+write_budget_json tst-tk1 demo "" 120 "" task pause
+rm -f "$EM_ROOT/state/.watch.budget.tst-tk1"
+out="$(budget_pass tst-tk1 "$(date +%s)")"
+expect "token soft threshold warns without a wake" test -z "$out"
+expect "warned.tokens latched" jq -e '.warned.tokens == true' "$TASKS/demo/tst-tk1/budget.json"
+mkdir -p "$EM_ROOT/config"
+printf 'usd_per_mtok_claude=50000\n' > "$EM_ROOT/config/budgets.conf"
+write_budget_json tst-tk1 demo "" "" 2.00 task warn-only
+rm -f "$EM_ROOT/state/.watch.budget.tst-tk1"
+out="$(budget_pass tst-tk1 "$(date +%s)")"
+# shellcheck disable=SC2016  # the $ signs are literal USD amounts
+expect "cost limit enforces with the configured rate" \
+  test "$out" = 'budget tst-tk1: cost exceeded — warn-only ($5.00/$2.00)'
+rm -f "$EM_ROOT/config/budgets.conf" "$EM_ROOT/state/tst-tk1.meta" \
+  "$EM_ROOT/state/tst-tk2.meta" "$EM_ROOT/state/tst-tk3.meta"
+
+note "budgets — default resolution order (BUD-2)"
+mkdir -p "$EM_ROOT/data/projects/demo"
+printf 'wall=30m\n' > "$EM_ROOT/data/projects/demo/budget"
+expect "project default resolves" \
+  test "$(resolve_default_budget_spec demo)" = "wall=30m project"
+printf 'budget=wall=20m\n' > "$EM_ROOT/config/budgets.conf"
+expect "project default beats the global" \
+  test "$(resolve_default_budget_spec demo)" = "wall=30m project"
+rm -f "$EM_ROOT/data/projects/demo/budget"
+expect "global default when no project file" \
+  test "$(resolve_default_budget_spec demo)" = "wall=20m global"
+rm -f "$EM_ROOT/config/budgets.conf"
+expect_rc "no defaults configured fails" 1 resolve_default_budget_spec demo
+make_project pbud
+expect "project-add records a default budget" \
+  "$BIN/em-project-add.sh" pbud --desc 'budgeted project' --mode direct-PR --budget wall=25m
+expect "default budget file written" \
+  test "$(cat "$EM_ROOT/data/projects/pbud/budget")" = "wall=25m"
+make_project pbud2
+expect_rc "project-add refuses a malformed budget" 1 \
+  "$BIN/em-project-add.sh" pbud2 --desc x --budget wall=zz
+
 # ------------------------------------------------------------- M2: em-watch
 note "em-watch.sh — signal/stale/check/heartbeat (fast timers)"
 watch_fast() {
@@ -1018,6 +1083,87 @@ EOF
   expect "task_killed logged" \
     grep -q '"event":"task_killed"' "$EM_ROOT/state/tasks/demo/tst-bw3/events.jsonl"
   "$BIN/em-teardown.sh" tst-bw3 >/dev/null 2>&1
+
+  note "budgets — dispatch picks up project/global defaults (BUD-β)"
+  mkdir -p "$EM_ROOT/data/projects/demo"
+  printf 'wall=30m\n' > "$EM_ROOT/data/projects/demo/budget"
+  "$BIN/em-brief.sh" tst-bd1 demo >/dev/null
+  fill_task tst-bd1
+  "$BIN/em-spawn.sh" tst-bd1 demo >/dev/null 2>&1
+  expect "project default applied at dispatch" \
+    jq -e '.source == "project" and .limits.wall_seconds == 1800' \
+    "$EM_ROOT/state/tasks/demo/tst-bd1/budget.json"
+  "$BIN/em-teardown.sh" tst-bd1 >/dev/null 2>&1
+  rm -f "$EM_ROOT/data/projects/demo/budget"
+  printf 'budget=wall=20m\n' > "$EM_ROOT/config/budgets.conf"
+  "$BIN/em-brief.sh" tst-bd2 demo >/dev/null
+  fill_task tst-bd2
+  "$BIN/em-spawn.sh" tst-bd2 demo >/dev/null 2>&1
+  expect "global default applied when no project default" \
+    jq -e '.source == "global" and .limits.wall_seconds == 1200' \
+    "$EM_ROOT/state/tasks/demo/tst-bd2/budget.json"
+  "$BIN/em-teardown.sh" tst-bd2 >/dev/null 2>&1
+  rm -f "$EM_ROOT/config/budgets.conf"
+
+  note "budgets — soft-threshold nudge reaches the IC pane (BUD-β)"
+  tmux_cmd new-window -d -t '=em:' -n em-tst-nu1 -c "$SANDBOX" 'bash --norc -i' 2>/dev/null ||
+    tmux_cmd new-window -d -t '=em:' -n em-tst-nu1 -c "$SANDBOX"
+  fake_meta tst-nu1 demo
+  write_budget_json tst-nu1 demo 100 "" "" task pause
+  mkdir -p "$TASKS/demo/tst-nu1"
+  jq -cn --argjson ep "$(($(date +%s) - 85))" \
+    '{ts: "crafted", ts_epoch: $ep, task: "tst-nu1", project: "demo",
+      event: "ic_spawned", actor: "em", data: {}}' >> "$TASKS/demo/tst-nu1/events.jsonl"
+  budget_pass tst-nu1 "$(date +%s)" >/dev/null
+  expect "nudge line typed into the pane" wait_for_pane tst-nu1 'EM notice:'
+  rm -f "$EM_ROOT/state/.watch.budget.tst-nu1"
+  budget_pass tst-nu1 "$(date +%s)" >/dev/null
+  sleep 1
+  expect "nudge sent exactly once" \
+    test "$("$BIN/em-peek.sh" tst-nu1 200 2>/dev/null | grep -c 'EM notice:')" = 1
+  tmux_cmd kill-window -t "$(find_window tst-nu1)" 2>/dev/null
+  rm -f "$EM_ROOT/state/tst-nu1.meta"
+
+  note "budgets — research grace: demand the report, then pause (BUD-10)"
+  printf 'grace_seconds=2\n' > "$EM_ROOT/config/budgets.conf"
+  "$BIN/em-brief.sh" tst-gr1 demo --research >/dev/null
+  fill_task tst-gr1
+  "$BIN/em-spawn.sh" tst-gr1 demo --research --budget wall=2s >/dev/null 2>&1
+  rm -f "$EM_ROOT/state/.watch."*
+  bout=""
+  for _ in 1 2 3 4 5; do
+    out="$(run_bounded 20 watch_budget)"
+    case "$out" in budget*)
+      bout="$out"
+      break
+      ;;
+    esac
+  done
+  expect "grace wake demands the report" \
+    grep -qE '^budget tst-gr1: wall exceeded — report demanded \(grace 2s\)$' <<< "$bout"
+  expect "IC told to write the report" wait_for_pane tst-gr1 'write the report now'
+  expect "IC still running during grace" find_window tst-gr1
+  expect "budget_exceeded logged with action grace" \
+    jq -e '.data.action == "grace"' \
+    <(grep '"event":"budget_exceeded"' "$EM_ROOT/state/tasks/demo/tst-gr1/events.jsonl" | head -n 1)
+  sleep 2
+  rm -f "$EM_ROOT/state/.watch.budget.tst-gr1"
+  bout=""
+  for _ in 1 2 3 4 5; do
+    out="$(run_bounded 20 watch_budget)"
+    case "$out" in budget*)
+      bout="$out"
+      break
+      ;;
+    esac
+  done
+  expect "grace expiry pauses" test "$bout" = "budget tst-gr1: grace expired — paused"
+  expect "snapshot latched paused after grace" \
+    jq -e '.state == "paused"' "$EM_ROOT/state/tasks/demo/tst-gr1/budget.json"
+  "$BIN/em-budget.sh" resume tst-gr1 >/dev/null 2>&1 # never leave a stopped IC behind
+  echo "# findings" > "$EM_ROOT/data/tst-gr1/report.md"
+  "$BIN/em-teardown.sh" tst-gr1 >/dev/null 2>&1
+  rm -f "$EM_ROOT/config/budgets.conf"
 fi
 
 # ------------------------------------------------- em-reset: runs dead last

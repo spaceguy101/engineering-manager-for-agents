@@ -90,12 +90,19 @@ an explicit `em-teardown.sh --purge-logs` (or a factory reset).
 
 Every task can carry a resource envelope, so the fleet is safe to run
 unattended: `--budget wall=45m,tokens=1.5M,cost=2.00` at brief or dispatch
-time (units `s`/`m`/`h` and `k`/`M`). The zero-cost watcher meters spend on
-its existing wake-ups — wall-clock ships today; token metering per harness
-adapter lands next. At 80% of any limit the task's status column turns loud
-and a `budget_warning` is logged; at 100% the IC is **paused**
-(SIGSTOP — no work is ever destroyed) and the EM reports with a
-recommendation. `--on-exceed kill|warn-only` picks a different action.
+time (units `s`/`m`/`h` and `k`/`M`). Defaults resolve task → project
+(`em-project-add.sh --budget`) → global (`config/budgets.conf`: `budget=`,
+`soft_pct=`, `on_exceed=`, `grace_seconds=`, `usd_per_mtok_<harness>=`) →
+unlimited. The zero-cost watcher meters spend on its existing wake-ups:
+wall-clock for every harness, tokens/cost wherever a meter adapter exists —
+Claude Code ships one that sums usage from its local session files (no API
+calls); other harnesses enforce wall-clock only and show
+`tokens: unmeterable`. At 80% of any limit the task's status column turns
+loud, a `budget_warning` is logged, and the IC gets a one-line wrap-up
+nudge; at 100% the IC is **paused** (SIGSTOP — no work is ever destroyed)
+and the EM reports with a recommendation. `--on-exceed kill|warn-only`
+picks a different action, and a research task at its limit is told to
+write the report now, with a grace window before the pause.
 
 ```sh
 bin/em-budget.sh show <task>            # limits, live spend, %, state
