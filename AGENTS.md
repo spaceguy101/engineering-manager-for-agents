@@ -37,7 +37,8 @@ PR, never straight to main.
 ## The world
 
 - `bin/` — your toolbelt. Every script prints its own usage with `--help`.
-- `data/<id>/brief.md` — per-task IC contract. `data/backlog.md` — task queue.
+- `data/<id>/brief.md` — per-task IC contract. `data/backlog.md` — task
+  queue; read it freely, write it only via `bin/em-backlog.sh` (Intake).
   `data/director.md` — Director's preferences (read at session start if present).
 - `data/projects/<name>/` — per-project long-term store: `memory.md` is your
   own accumulated knowledge of the project; `kb/` is the Director's knowledge
@@ -72,7 +73,9 @@ PR, never straight to main.
    then that project cannot take build tasks. Fleet-sync skips are
    informational — investigate only if they block a task. Dispatch nothing
    until tools and GitHub auth are good.
-2. Read `data/backlog.md` and `data/director.md` if they exist.
+2. Read `data/backlog.md` and `data/director.md` if they exist;
+   `bin/em-backlog.sh validate` cross-checks the queue against task records
+   (malformed lines are errors, record drift is a warning to reconcile).
 3. **Recover** — you may have been killed mid-flight; reconcile reality with
    records before doing anything:
    - Run `bin/em-status.sh` for the one-line-per-task overview (project,
@@ -178,25 +181,31 @@ knowledge dump:
   commits); relay the evidence, and add `--force` only when the Director
   explicitly says to discard that work.
 
-Record every accepted task in `data/backlog.md`:
+Record every accepted task in `data/backlog.md` via `bin/em-backlog.sh` —
+never hand-edit the file (the script keeps it valid, atomic, and
+machine-checkable):
 
 ```
-## In flight
-- [ ] <id> - <one line> (repo: <name>, since <date>)
-
-## Queued
-- [ ] <id> - <one line> (repo: <name>) blocked-by: <id> - <reason>
-
-## Done
-- [x] <id> - <one line> - <PR URL | local main | data/<id>/report.md> (<date>)
+em-backlog.sh add <id> <repo> "<one line>"        # accepted → In flight
+em-backlog.sh add <id> <repo> "<one line>" \
+              --blocked-by <id> --reason "<why>"  # accepted → Queued
+em-backlog.sh start <id>                          # queued → In flight (at dispatch)
+em-backlog.sh done <id> "<outcome>"               # → Done; outcome = PR URL |
+                                                  #   local main | data/<id>/report.md |
+                                                  #   failed: <why>
+em-backlog.sh unblocked                           # queued ids whose blocker landed
+em-backlog.sh validate                            # grammar + task-record cross-check
 ```
 
+The file keeps the human-readable shape (`## In flight` / `## Queued` /
+`## Done` checklists) — read it freely; write only through the script.
 Tasks touching the same repo *and* overlapping area queue behind each other
-(`blocked-by`), as does anything depending on an unmerged PR; everything
+(`--blocked-by`), as does anything depending on an unmerged PR; everything
 else dispatches immediately, no concurrency cap (courtesy cost mention to
 the Director above ~8 concurrent jobs, never blocking on it). Re-evaluate
-Queued on every teardown and heartbeat. Done keeps only the 10 most recent
-entries — PRs, local main, and report files are the durable record.
+Queued on every teardown and heartbeat (`em-backlog.sh unblocked` prints
+what is ready to dispatch). Done keeps only the 10 most recent entries —
+PRs, local main, and report files are the durable record.
 
 ## Task lifecycle
 
@@ -225,7 +234,7 @@ entries — PRs, local main, and report files are the durable record.
    Spawn checks the pane ~5s after launch and prints a hint if a trust or
    bypass-permissions dialog is waiting — act on it (see harness notes).
    Still `bin/em-peek.sh <id>` within ~20s to confirm the IC is processing.
-   Add the task to the backlog.
+   Record it: `bin/em-backlog.sh add` (or `start` if it was queued).
 3. **Supervise via the watcher** (see the supervision protocol below —
    the watcher wakes you; between wakes you do and say nothing about
    in-flight work). Steer with one short line via `bin/em-send.sh <id>
@@ -250,7 +259,8 @@ entries — PRs, local main, and report files are the durable record.
    via `gh pr merge`. When the merge is confirmed (a `check <id>: PR merged`
    wake, or your own verification), run `bin/em-teardown.sh <id>`, then
    `bin/em-fleet-sync.sh <project>` so the clone catches up and the merged
-   branch is pruned; move the task to Done and dispatch anything unblocked.
+   branch is pruned; `bin/em-backlog.sh done <id> "<PR URL>"` and dispatch
+   whatever `bin/em-backlog.sh unblocked` now prints.
    If the task taught you something durable about the project, append it to
    `data/projects/<project>/memory.md` while it's fresh.
    If teardown refuses (exit 3), investigate and explain — e.g. a
@@ -263,8 +273,8 @@ Same intake/spawn/supervision; no gate, no PR. On `done: report ready`, read
 `data/<id>/report.md` and relay the **findings** (never "the task is done"):
 plain chat for a focused answer, a structured summary for multi-finding
 reports. Then tear down immediately — `bin/em-teardown.sh <id>` requires
-only that the report exists (the worktree is scratch) — and record Done in
-the backlog with the report path.
+only that the report exists (the worktree is scratch) — and record it:
+`bin/em-backlog.sh done <id> data/<id>/report.md`.
 
 **Promotion.** When research uncovers shippable work the Director wants
 built, promote in place: `bin/em-promote.sh <id>` flips it to a protected
@@ -306,7 +316,8 @@ Handle wakes cheapest-first:
 - `heartbeat` — mandatory full-fleet review: start with `bin/em-status.sh`
   (one line per task: window liveness + last status), read any status file
   or peek any pane that looks off, check PR-ready tasks, reconcile the
-  backlog, re-evaluate queued work, then restart the watcher. An unchanged
+  backlog (`bin/em-backlog.sh validate`, dispatch what `unblocked` prints),
+  then restart the watcher. An unchanged
   heartbeat is internal — never reported to the Director.
 - `idle` — nothing in flight; don't restart the watcher until the next
   dispatch.
@@ -329,7 +340,8 @@ trusted over the heartbeat's own look at the panes.
    appends the note to the brief and replays the spawn launch command in the
    existing window and worktree (commits persist; this is cheap). Never tear
    down just to relaunch.
-5. A second relaunch fails → mark `failed` in the backlog, tell the Director
+5. A second relaunch fails → `bin/em-backlog.sh done <id> "failed: <why>"`,
+   tell the Director
    with evidence (last status lines + a bounded peek).
 
 ## Harness adapters

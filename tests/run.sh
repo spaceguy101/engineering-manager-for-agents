@@ -1166,6 +1166,58 @@ EOF
   rm -f "$EM_ROOT/config/budgets.conf"
 fi
 
+# ----------------------------------------------------------------- backlog
+note "em-backlog.sh — scripted queue: add/start/done/unblocked/validate"
+BLG="$EM_ROOT/data/backlog.md"
+rm -f "$BLG"
+expect "add creates the backlog with an in-flight entry" \
+  "$BIN/em-backlog.sh" add tst-bl1 demo "first task"
+expect "entry lands under In flight with a since date" \
+  grep -qF -- '- [ ] tst-bl1 - first task (repo: demo, since ' "$BLG"
+expect_rc "duplicate add refused" 1 "$BIN/em-backlog.sh" add tst-bl1 demo "again"
+expect_rc "invalid task id refused" 1 "$BIN/em-backlog.sh" add 'Bad_ID' demo "x"
+expect "blocked add goes to Queued" "$BIN/em-backlog.sh" add tst-bl2 demo \
+  "second task" --blocked-by tst-bl1 --reason "same area"
+expect "queued line records blocker and reason" test \
+  "$("$BIN/em-backlog.sh" list queued)" = \
+  '- [ ] tst-bl2 - second task (repo: demo) blocked-by: tst-bl1 - same area'
+expect_rc "--reason without --blocked-by refused" 1 \
+  "$BIN/em-backlog.sh" add tst-bl3 demo "x" --reason "orphan reason"
+expect "unblocked prints nothing while the blocker is open" \
+  test -z "$("$BIN/em-backlog.sh" unblocked)"
+expect "validate passes a well-formed file" "$BIN/em-backlog.sh" validate
+expect "done moves the entry to Done" \
+  "$BIN/em-backlog.sh" 'done' tst-bl1 "https://example.test/pr/1"
+expect "done line checked off with outcome and date" \
+  grep -qF -- '- [x] tst-bl1 - first task - https://example.test/pr/1 (' "$BLG"
+expect "blocker landed: the queued task is now unblocked" \
+  test "$("$BIN/em-backlog.sh" unblocked)" = tst-bl2
+expect "start moves queued to in flight" "$BIN/em-backlog.sh" start tst-bl2
+expect "started entry carries a since date" \
+  grep -qF -- '- [ ] tst-bl2 - second task (repo: demo, since ' "$BLG"
+expect_rc "start on an in-flight entry refused" 1 "$BIN/em-backlog.sh" start tst-bl2
+expect_rc "done on an already-done entry refused" 1 \
+  "$BIN/em-backlog.sh" 'done' tst-bl1 "again"
+for i in 1 2 3 4 5 6 7 8 9 10 11; do
+  "$BIN/em-backlog.sh" add "tst-tr$i" demo "trim filler $i" >/dev/null
+  "$BIN/em-backlog.sh" 'done' "tst-tr$i" "local main" >/dev/null
+done
+expect "Done keeps only the 10 most recent entries" \
+  test "$(grep -c '^- \[x\] ' "$BLG")" = 10
+expect "newest done entry is listed first" \
+  grep -qF tst-tr11 <(grep -m 1 '^- \[x\] ' "$BLG")
+echo '- [ ] not a valid line' >> "$BLG"
+expect_rc "validate flags a malformed line" 1 "$BIN/em-backlog.sh" validate
+grep -vF -- '- [ ] not a valid line' "$BLG" > "$BLG.fix" && mv "$BLG.fix" "$BLG"
+expect "remove drops an entry" "$BIN/em-backlog.sh" remove tst-bl2
+expect_rc "removed entry is gone" 1 grep -qF 'tst-bl2' "$BLG"
+fake_meta tst-blx demo
+expect "in-flight task missing from the backlog only warns" \
+  grep -q "tst-blx" <("$BIN/em-backlog.sh" validate 2>&1)
+expect "cross-check warnings do not fail validate" "$BIN/em-backlog.sh" validate
+rm -f "$EM_ROOT/state/tst-blx.meta"
+rm -f "$BLG"
+
 # ------------------------------------------------- em-reset: runs dead last
 # (a successful reset empties the sandbox fleet; nothing may run after it)
 note "em-reset.sh — dry run, refusals, then the full factory reset"
