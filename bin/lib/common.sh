@@ -20,7 +20,10 @@
 #                        session or the dedicated 'em' session
 #   find_window    print a tmux target for a task's window, in any session
 #   meta_path/meta_get/meta_set   accessors for state/<id>.meta (key=value)
-#   default_branch       resolve origin's default branch name for a clone
+#   task_dir       per-task event/budget directory: state/tasks/<project>/<id>
+#   emit_event     append to a task's event log via em-log-event.sh; never
+#                  fails the caller (logging is best-effort by design)
+#   default_branch resolve origin's default branch name for a clone
 #   mtime                file modification epoch (portable macOS/Linux)
 #   run_bounded          run a command with a kill-after timeout (no GNU
 #                        timeout dependency)
@@ -151,6 +154,17 @@ meta_set() {
     { print }
     END { if (!done) print k "=" v }
   ' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+# task_dir <id> <project> — the task's durable event/budget directory.
+task_dir() {
+  printf '%s/tasks/%s/%s\n' "$EM_STATE" "$2" "$1"
+}
+
+# emit_event <id> <event-type> [args…] — append to the task's event log.
+# The operation being logged always proceeds: log failures warn, never fail.
+emit_event() {
+  "$EM_BIN/em-log-event.sh" "$@" || true
 }
 
 # mtime <file> — modification time as epoch seconds (BSD and GNU stat).

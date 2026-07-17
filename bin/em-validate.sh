@@ -31,7 +31,11 @@ main() {
   [ -n "$test_cmd" ] || [ -n "$lint_cmd" ] ||
     die "no gate commands configured for '$project' — record test:/lint: in data/projects.md first"
 
-  local red=0
+  local red=0 failed="" fail_tail="" outdir
+  outdir="$(mktemp -d "${TMPDIR:-/tmp}/em-gate.XXXXXX")"
+  trap 'rm -rf "$outdir"' EXIT
+
+  emit_event "$id" gate_started --actor ic
   run_step() { # <label> <cmd>
     local label="$1" cmd="$2"
     if [ -z "$cmd" ]; then
@@ -39,10 +43,14 @@ main() {
       return 0
     fi
     log "gate: $label — $cmd"
-    if (cd "$wt" && bash -c "$cmd"); then
+    if (cd "$wt" && bash -c "$cmd" 2>&1 | tee "$outdir/$label.log"); then
       log "gate: $label PASSED"
     else
       log "gate: $label FAILED"
+      failed="$failed $label"
+      fail_tail+="== $label ==
+$(tail -n 20 "$outdir/$label.log" 2>/dev/null)
+"
       red=1
     fi
   }
@@ -50,9 +58,13 @@ main() {
   run_step lint "$lint_cmd"
 
   if [ "$red" -ne 0 ]; then
+    emit_event "$id" gate_failed --actor ic \
+      --data "$(jq -cn --arg failed "${failed# }" --arg tail "$fail_tail" \
+        '{failed: ($failed | split(" ")), tail: $tail}' 2>/dev/null || true)"
     log "gate: RED — fix the failures above and re-run"
     exit 1
   fi
+  emit_event "$id" gate_passed --actor ic
   log "gate: GREEN"
 }
 

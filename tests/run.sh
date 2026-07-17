@@ -12,6 +12,7 @@ REPO_DIR="$(cd -- "$TESTS_DIR/.." && pwd -P)"
 BIN="$REPO_DIR/bin"
 
 command -v git >/dev/null || { echo "SKIP: git not installed — cannot test anything" >&2; exit 0; }
+command -v jq >/dev/null || { echo "SKIP: jq not installed — hard prerequisite (event log + budgets)" >&2; exit 0; }
 
 SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/em-tests.XXXXXX")"
 export EM_ROOT="$SANDBOX/fleet"
@@ -82,6 +83,19 @@ wait_for_pane() {
     sleep 1
   done
   return 1
+}
+
+# events_in_order <events.jsonl> <ev1> <ev2>… — the named events appear in
+# this order in the log (other events may interleave).
+events_in_order() {
+  local f="$1" pat
+  shift
+  pat="*$(printf '%s*' "$@")"
+  # shellcheck disable=SC2254  # $pat is deliberately a glob
+  case "$(jq -r .event "$f" 2>/dev/null | tr '\n' ' ')" in
+    $pat) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 # ---------------------------------------------------------------- worktree
@@ -276,6 +290,17 @@ expect "records the PR and writes the check" "$BIN/em-pr-check.sh" tst-p1 https:
 expect "meta carries the PR url" grep -qx 'pr=https://github.com/o/r/pull/7' "$EM_ROOT/state/tst-p1.meta"
 expect "check script is executable" test -x "$EM_ROOT/state/tst-p1.check.sh"
 expect "check script polls that PR" grep -q 'github.com/o/r/pull/7' "$EM_ROOT/state/tst-p1.check.sh"
+expect "arming the poll logs pr_opened" \
+  grep -q '"event":"pr_opened"' "$EM_ROOT/state/tasks/demo/tst-p1/events.jsonl"
+mkdir -p "$SANDBOX/fakegh"
+printf '#!/usr/bin/env bash\necho MERGED\n' > "$SANDBOX/fakegh/gh"
+chmod +x "$SANDBOX/fakegh/gh"
+PATH="$SANDBOX/fakegh:$PATH" bash "$EM_ROOT/state/tst-p1.check.sh" >/dev/null
+expect "generated poll logs the merged event" \
+  grep -q '"event":"merged"' "$EM_ROOT/state/tasks/demo/tst-p1/events.jsonl"
+PATH="$SANDBOX/fakegh:$PATH" bash "$EM_ROOT/state/tst-p1.check.sh" >/dev/null
+expect "marker prevents a duplicate merged event on re-poll" \
+  test "$(grep -c '"event":"merged"' "$EM_ROOT/state/tasks/demo/tst-p1/events.jsonl")" = 1
 
 note "em-fleet-sync.sh — fetch, fast-forward, safe prune"
 make_project fs1
@@ -499,6 +524,100 @@ expect "takes over a dead session's stale lock" env EM_SESSION_PID=$$ "$BIN/em-l
 "$BIN/em-lock.sh" release
 expect "release unlocks" grep -q unlocked <("$BIN/em-lock.sh" status)
 
+# ------------------------------------------------------- audit log (LOG-α)
+note "em-log-event.sh — the single sanctioned writer"
+TASKS="$EM_ROOT/state/tasks"
+fake_meta tst-el1 demo
+EL1="$TASKS/demo/tst-el1/events.jsonl"
+expect "appends an event (project from meta)" "$BIN/em-log-event.sh" tst-el1 ic_spawned --actor em
+expect "log created under state/tasks/<project>/<id>/" test -f "$EL1"
+expect "line is valid JSON" jq -e . "$EL1"
+expect "ts is ISO-8601 UTC" \
+  grep -q '"ts":"20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z"' "$EL1"
+expect "ts_epoch is numeric" jq -e '.ts_epoch | type == "number"' <(head -n 1 "$EL1")
+expect "--project covers pre-meta events" "$BIN/em-log-event.sh" tst-el2 task_created --project demo --actor em
+expect "pre-meta event landed" test -f "$TASKS/demo/tst-el2/events.jsonl"
+expect_rc "rejects an unknown event type (2)" 2 "$BIN/em-log-event.sh" tst-el1 nonsense_event
+expect_rc "rejects an unknown actor (2)" 2 "$BIN/em-log-event.sh" tst-el1 merged --actor boss
+expect_rc "REFUSES (3) a path-escaping project" 3 "$BIN/em-log-event.sh" tst-el1 merged --project '../evil'
+expect_rc "REFUSES (3) an invalid task id" 3 "$BIN/em-log-event.sh" 'Bad_ID' merged --project demo
+expect "no project resolvable: event dropped, still exit 0" "$BIN/em-log-event.sh" tst-none merged
+expect "dropped event wrote nothing" test -z "$(find "$TASKS" -name tst-none 2>/dev/null)"
+"$BIN/em-log-event.sh" tst-el1 gate_failed --actor ic --data 'not json' 2>/dev/null
+expect "invalid --data wrapped raw, never lost" grep -q '_invalid_json' "$EL1"
+big="$(printf 'x%.0s' $(seq 1 8000))"
+"$BIN/em-log-event.sh" tst-el1 gate_failed --actor ic --data "{\"tail\": \"$big\"}"
+expect "oversized payload truncated with a marker" grep -q '"truncated":true' "$EL1"
+# shellcheck disable=SC2016  # $0 is awk's, not shell's
+expect "no line exceeds 4096 bytes" awk 'length($0) > 4096 { exit 1 }' "$EL1"
+"$BIN/em-log-event.sh" tst-el1 merged --actor em
+expect "merged auto-carries notify:true" jq -e '.notify == true' <(grep '"event":"merged"' "$EL1")
+
+note "em-log-event.sh — notification hook (fire-and-forget)"
+mkdir -p "$EM_ROOT/config/hooks"
+printf '#!/usr/bin/env bash\ncat >> "%s/hook-events.jsonl"\n' "$SANDBOX" > "$EM_ROOT/config/hooks/on-event"
+chmod +x "$EM_ROOT/config/hooks/on-event"
+"$BIN/em-log-event.sh" tst-el1 task_paused --actor em
+hook_ok=1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if grep -q '"event":"task_paused"' "$SANDBOX/hook-events.jsonl" 2>/dev/null; then hook_ok=0; break; fi
+  sleep 0.3
+done
+expect "hook received the event on stdin" test "$hook_ok" = 0
+printf '#!/usr/bin/env bash\nexit 1\n' > "$EM_ROOT/config/hooks/on-event"
+expect "a failing hook never fails the writer" "$BIN/em-log-event.sh" tst-el1 task_resumed --actor em
+rm -rf "$EM_ROOT/config/hooks"
+
+note "em-log-event.sh — concurrent appends"
+(for i in $(seq 1 50); do
+  "$BIN/em-log-event.sh" tst-el3 ic_signal --project demo --actor ic --data "{\"line\":\"a$i\"}"
+done) &
+W1PID=$!
+(for i in $(seq 1 50); do
+  "$BIN/em-log-event.sh" tst-el3 ic_signal --project demo --actor ic --data "{\"line\":\"b$i\"}"
+done) &
+W2PID=$!
+wait "$W1PID" "$W2PID"
+EL3="$TASKS/demo/tst-el3/events.jsonl"
+expect "two concurrent writers: no line lost" test "$(wc -l < "$EL3" | tr -d ' ')" = 100
+expect "two concurrent writers: no line torn" jq -e . "$EL3"
+
+note "lifecycle instrumentation — events emitted by the sections above"
+expect "brief logs task_created → brief_written, --force logs rebrief" \
+  events_in_order "$TASKS/demo/tst-b1/events.jsonl" task_created brief_written rebrief brief_written
+expect "green gate logs gate_started → gate_passed" \
+  events_in_order "$TASKS/gp/tst-v1/events.jsonl" gate_started gate_passed
+expect "red gate logs gate_failed naming the failing step" \
+  jq -e '.data.failed == ["test"]' <(grep '"event":"gate_failed"' "$TASKS/gbad/tst-v2/events.jsonl")
+expect "gate events carry actor=ic" \
+  jq -e '.actor == "ic"' <(grep '"event":"gate_passed"' "$TASKS/gp/tst-v1/events.jsonl")
+expect "local merge logs merge_approved → merged" \
+  events_in_order "$TASKS/loco/tst-m1/events.jsonl" merge_approved merged
+expect "promotion logs task_promoted" \
+  grep -q '"event":"task_promoted"' "$TASKS/demo/tst-x2/events.jsonl"
+
+note "em-timeline.sh — reader"
+out="$("$BIN/em-timeline.sh" tst-b1 2>/dev/null)" # no meta left: glob lookup
+expect "human timeline renders the events" grep -q 'task_created' <<< "$out"
+expect "actor rendered" grep -q '(em)' <<< "$out"
+expect "--json emits valid JSON per line" jq -e . <("$BIN/em-timeline.sh" tst-b1 --json)
+B1_LINES="$(wc -l < "$TASKS/demo/tst-b1/events.jsonl" | tr -d ' ')"
+expect "--json passes every line through" \
+  test "$("$BIN/em-timeline.sh" tst-b1 --json | wc -l | tr -d ' ')" = "$B1_LINES"
+expect "--since 0 (epoch) keeps everything" \
+  test "$("$BIN/em-timeline.sh" tst-b1 --json --since 0 | wc -l | tr -d ' ')" = "$B1_LINES"
+expect "--since a future ISO timestamp filters everything" \
+  test -z "$("$BIN/em-timeline.sh" tst-b1 --since 2100-01-01)"
+expect "--errors-only drops routine events" test -z "$("$BIN/em-timeline.sh" tst-b1 --errors-only)"
+expect "--errors-only keeps gate_failed" \
+  grep -q gate_failed <("$BIN/em-timeline.sh" tst-v2 --errors-only 2>/dev/null)
+"$BIN/em-log-event.sh" tst-amb task_created --project demo --actor em
+"$BIN/em-log-event.sh" tst-amb task_created --project loco --actor em
+expect_rc "ambiguous id demands --project" 1 "$BIN/em-timeline.sh" tst-amb
+expect "--project disambiguates" "$BIN/em-timeline.sh" tst-amb --project loco
+expect_rc "task without a log fails plainly" 1 "$BIN/em-timeline.sh" tst-nolog
+rm -f "$EM_ROOT/state/tst-el1.meta" # nothing in flight for the watcher cases
+
 # ------------------------------------------------------------- M2: em-watch
 note "em-watch.sh — signal/stale/check/heartbeat (fast timers)"
 watch_fast() {
@@ -507,7 +626,7 @@ watch_fast() {
 }
 out="$(watch_fast)"
 expect "reports idle with no tasks in flight" test "$out" = "idle"
-printf 'window=em-tst-w1\n' > "$EM_ROOT/state/tst-w1.meta"
+printf 'window=em-tst-w1\nproject=demo\n' > "$EM_ROOT/state/tst-w1.meta"
 echo "starting: warming up" >> "$EM_ROOT/state/tst-w1.status"
 out="$(run_bounded 20 watch_fast)"
 expect "fires signal on a new status line" test "$out" = "signal tst-w1"
@@ -528,7 +647,13 @@ expect "non-heartbeat wake resets the backoff streak" test "$(cat "$EM_ROOT/stat
 printf 'echo "PR merged"\n' > "$EM_ROOT/state/tst-w1.check.sh"
 out="$(run_bounded 20 watch_fast)"
 expect "per-task check fires with its output" test "$out" = "check tst-w1: PR merged"
+WEV="$EM_ROOT/state/tasks/demo/tst-w1/events.jsonl"
+expect "watcher logs ic_signal per new status line" \
+  test "$(grep -c '"event":"ic_signal"' "$WEV")" = 2
+expect "ic_signal carries the status line text" grep -q '"line":"starting: warming up"' "$WEV"
+expect "stale wake logs stall_detected" grep -q '"event":"stall_detected"' "$WEV"
 rm -f "$EM_ROOT/state/tst-w1".* "$EM_ROOT/state/.watch."*
+expect "event log survives the watcher-state wipe (LOG-8)" jq -e . "$WEV"
 
 # ----------------------------------------------------------- tmux-dependent
 if ! command -v tmux >/dev/null; then
@@ -566,6 +691,9 @@ EOF
   expect "window em-tst-s1 exists" find_window tst-s1
   expect "IC launched with the brief prompt" wait_for_pane tst-s1 FAKE_IC_READY
   expect_rc "spawn refuses a duplicate task" 1 "$BIN/em-spawn.sh" tst-s1 demo
+  # PR events for the LOG-5 lifecycle-chain assertion at teardown.
+  "$BIN/em-pr-check.sh" tst-s1 https://github.com/o/r/pull/11 >/dev/null 2>&1
+  PATH="$SANDBOX/fakegh:$PATH" bash "$EM_ROOT/state/tst-s1.check.sh" >/dev/null
 
   note "em-send.sh / em-peek.sh — against a plain shell window"
   tmux_cmd new-window -d -t '=em:' -n em-tst-io -c "$SANDBOX" 'bash --norc -i' 2>/dev/null ||
@@ -589,6 +717,13 @@ EOF
   expect "volatile state cleared" test ! -e "$META"
   expect "durable data/<id>/ kept" test -f "$BRIEF" # tst-b1 untouched
   expect "brief of the torn-down task kept too" test -f "$EM_ROOT/data/tst-s1/brief.md"
+  S1EV="$EM_ROOT/state/tasks/demo/tst-s1/events.jsonl"
+  expect "event log retained after teardown (LOG-9)" jq -e . "$S1EV"
+  expect "refusal logged before the clean teardown" \
+    grep -q '"reason":"unlanded-work"' "$S1EV"
+  expect "full lifecycle event chain in order (LOG-5)" events_in_order "$S1EV" \
+    task_created brief_written worktree_created ic_spawned pr_opened merged \
+    teardown_refused teardown_completed task_closed
 
   note "research lifecycle — scratch worktree, report-gated teardown"
   "$BIN/em-brief.sh" tst-x3 demo --research >/dev/null
@@ -597,9 +732,13 @@ EOF
   expect "meta records kind=research" grep -qx 'kind=research' "$EM_ROOT/state/tst-x3.meta"
   echo scratch-mess > "$WT/tst-x3/junk.txt"
   expect_rc "teardown REFUSES (3) without a report" 3 "$BIN/em-teardown.sh" tst-x3
+  expect "no-report refusal logged" \
+    grep -q '"reason":"no-report"' "$EM_ROOT/state/tasks/demo/tst-x3/events.jsonl"
   echo "# findings" > "$EM_ROOT/data/tst-x3/report.md"
   expect "with the report, scratch mess is no obstacle" "$BIN/em-teardown.sh" tst-x3
   expect "report survives teardown" test -f "$EM_ROOT/data/tst-x3/report.md"
+  expect "research teardown logs report_delivered → task_closed" events_in_order \
+    "$EM_ROOT/state/tasks/demo/tst-x3/events.jsonl" report_delivered teardown_completed task_closed
 
   note "harness verification gate"
   "$BIN/em-brief.sh" tst-x4 demo >/dev/null
@@ -641,6 +780,11 @@ EOF
     "$BIN/em-relaunch.sh" tst-rl1 --note 'resumed after test kill'
   expect "note appended to the brief" grep -q 'resumed after test kill' "$EM_ROOT/data/tst-rl1/brief.md"
   expect "IC running again" wait_for_pane tst-rl1 FAKE_IC_READY
+  RLEV="$EM_ROOT/state/tasks/demo/tst-rl1/events.jsonl"
+  expect "relaunch logged as rebrief with the note" \
+    jq -e 'select(.event == "rebrief") | .data.note' "$RLEV"
+  expect "relaunch never logs a second ic_spawned (wall-clock anchor)" \
+    test "$(grep -c '"event":"ic_spawned"' "$RLEV")" = 1
   expect_rc "relaunch of an unknown task fails" 1 "$BIN/em-relaunch.sh" tst-zz
   "$BIN/em-teardown.sh" tst-rl1 >/dev/null 2>&1
 

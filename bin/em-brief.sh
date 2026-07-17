@@ -52,9 +52,10 @@ main() {
   [ "$research" -eq 1 ] && tpl="$EM_TEMPLATES/brief-research.md"
   [ -f "$tpl" ] || die "missing template: $tpl"
 
-  local out="$EM_DATA/$id/brief.md"
-  if [ -e "$out" ] && [ "$force" -ne 1 ]; then
-    die "brief already exists: $out (use --force to overwrite)"
+  local out="$EM_DATA/$id/brief.md" existed=0
+  if [ -e "$out" ]; then
+    [ "$force" -eq 1 ] || die "brief already exists: $out (use --force to overwrite)"
+    existed=1
   fi
 
   local dtpl=""
@@ -105,6 +106,19 @@ main() {
 
   mkdir -p "$EM_DATA/$id"
   printf '%s\n' "$content" > "$out"
+
+  local kind=build
+  [ "$research" -eq 1 ] && kind=research
+  if [ "$existed" -eq 1 ]; then
+    emit_event "$id" rebrief --actor em --project "$repo" --data '{"force": true}'
+  else
+    emit_event "$id" task_created --actor em --project "$repo" \
+      --data "$(jq -cn --arg kind "$kind" --arg mode "${mode:-}" \
+        '{kind: $kind, mode: (if $mode == "" then null else $mode end)}' 2>/dev/null || true)"
+  fi
+  emit_event "$id" brief_written --actor em --project "$repo" \
+    --data "$(jq -cn --arg t "$(basename "$tpl")" '{template: $t}' 2>/dev/null || true)"
+
   printf '%s\n' "$out"
 }
 

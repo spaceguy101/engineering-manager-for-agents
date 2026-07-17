@@ -13,8 +13,10 @@
 #                              Director instruction.
 #
 # Removed: projects/* (symlinks are unlinked, their targets untouched),
-# worktrees/*, state/* (including the session lock), every data/ entry except
-# director.md, and every em-* tmux window (plus the dedicated 'em' session).
+# worktrees/*, state/* (including the session lock and every task's event log
+# under state/tasks/ — the one sanctioned way logs are deleted), every data/
+# entry except director.md, and every em-* tmux window (plus the dedicated
+# 'em' session).
 # Kept: data/director.md (about the Director, not a project) and config/
 # (machine-level harness setup) — delete those by hand if a bare instance is
 # wanted.
@@ -51,7 +53,7 @@ plan_list() {
     fi
   done
   n="$(state_entry_count)"
-  if [ "$n" -gt 0 ]; then printf 'state/ (%s entries)\n' "$n"; fi
+  if [ "$n" -gt 0 ]; then printf 'state/ (%s entries, including task event logs)\n' "$n"; fi
   for e in "$EM_DATA"/*; do
     if { [ -e "$e" ] || [ -L "$e" ]; } && [ "${e##*/}" != director.md ]; then
       printf 'data/%s\n' "${e##*/}"

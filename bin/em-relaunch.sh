@@ -57,6 +57,11 @@ main() {
   fi
   tmux_cmd send-keys -t "$target" -l -- "$launch"
   tmux_cmd send-keys -t "$target" Enter
+  # rebrief, not ic_spawned: the first ic_spawned stays the task's wall-clock
+  # anchor across relaunches.
+  emit_event "$id" rebrief --actor em \
+    --data "$(jq -cn --arg note "$note" \
+      '{relaunch: true} + (if $note == "" then {} else {note: $note} end)' 2>/dev/null || true)"
   log "relaunched $id — peek within ~20s (em-peek.sh $id) to confirm it picked the brief back up"
 }
 

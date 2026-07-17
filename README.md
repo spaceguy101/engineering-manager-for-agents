@@ -30,9 +30,9 @@ reports.
 
 ## Install
 
-Prerequisites: `git` (≥ 2.5), `tmux`, a supported terminal coding agent
-(currently **Claude Code**), and the GitHub CLI (`gh`, authenticated) for PR
-delivery.
+Prerequisites: `git` (≥ 2.5), `tmux`, `jq` (task event logs and budgets), a
+supported terminal coding agent (currently **Claude Code**), and the GitHub
+CLI (`gh`, authenticated) for PR delivery.
 
 ```sh
 git clone <this-repo> engineering-manager-for-agents

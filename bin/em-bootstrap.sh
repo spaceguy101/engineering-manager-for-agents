@@ -50,6 +50,9 @@ main() {
     printf 'NEEDS_GH_AUTH — ask the Director to run: gh auth login\n'
   fi
 
+  command -v jq >/dev/null ||
+    printf 'missing: jq (task event logs + budgets) — install: %s\n' "$(install_hint jq)"
+
   if [ -f "$EM_CONFIG/crew-harness" ]; then
     printf 'harness-override: %s\n' "$(head -n1 "$EM_CONFIG/crew-harness" | tr -d '[:space:]')"
   fi

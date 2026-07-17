@@ -151,6 +151,8 @@ main() {
 
   local wt
   wt="$("$EM_BIN/em-worktree.sh" add "$id" "$repo")"
+  emit_event "$id" worktree_created --actor em --project "$repo" \
+    --data "$(jq -cn --arg path "$wt" '{path: $path}' 2>/dev/null || true)"
 
   # Turn-end hook mechanics are claude-specific; other harnesses rely on
   # stale/heartbeat supervision.
@@ -185,6 +187,8 @@ EOF
   tmux_cmd send-keys -t "$target" Enter
 
   log "spawned $id in window $win"
+  emit_event "$id" ic_spawned --actor em \
+    --data "$(jq -cn --arg h "$harness" --arg w "$win" '{harness: $h, window: $w}' 2>/dev/null || true)"
   verify_launch "$id" "$target"
   printf '%s\n' "$wt"
 }

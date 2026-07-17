@@ -105,10 +105,19 @@ main() {
       sleep "$SIGNAL_GRACE"
       changed=""
       for id in $ids; do
-        local lines
+        local lines seen
         lines="$(status_lines "$id")"
-        if [ "$lines" -gt "$(seen_lines "$id")" ]; then
+        seen="$(seen_lines "$id")"
+        if [ "$lines" -gt "$seen" ]; then
           changed="$changed $id"
+          # Audit trail: one ic_signal event per new status line (best-effort;
+          # never disturbs detection).
+          tail -n +"$((seen + 1))" "$EM_STATE/$id.status" 2>/dev/null |
+            while IFS= read -r sline; do
+              [ -n "$sline" ] || continue
+              emit_event "$id" ic_signal --actor ic \
+                --data "$(jq -cn --arg line "$sline" '{line: $line}' 2>/dev/null || true)"
+            done
           printf '%s\n' "$lines" > "$EM_STATE/.watch.seen.$id"
         fi
       done
@@ -129,6 +138,7 @@ main() {
         [ $((now - te_m)) -ge "$SIGNAL_GRACE" ] &&
         [ $((te_m - st_m)) -gt "$SIGNAL_GRACE" ]; then
         touch -r "$te" "$marker"
+        emit_event "$id" stall_detected --actor watcher
         fire "stale $id"
       fi
     done

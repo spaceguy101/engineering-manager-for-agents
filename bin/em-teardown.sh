@@ -38,8 +38,10 @@ main() {
   local kind
   kind="$(meta_get "$id" kind 2>/dev/null || printf 'build')"
   if [ "$kind" = "research" ] && [ "$force" != "--force" ]; then
-    [ -s "$EM_DATA/$id/report.md" ] ||
+    [ -s "$EM_DATA/$id/report.md" ] || {
+      emit_event "$id" teardown_refused --actor em --data '{"reason": "no-report"}'
       die_refuse "research task $id has no report at data/$id/report.md — get the report written first (or --force on an explicit Director instruction to discard)"
+    }
     force="--force" # report exists; the scratch worktree may go regardless of unlanded work
   fi
 
@@ -52,6 +54,7 @@ main() {
     else
       "$EM_BIN/em-worktree.sh" remove "$id" || rc=$?
       if [ "$rc" -eq 3 ]; then
+        emit_event "$id" teardown_refused --actor em --data '{"reason": "unlanded-work"}'
         log "teardown of $id aborted — window and state kept for investigation"
         exit 3
       elif [ "$rc" -ne 0 ]; then
@@ -66,6 +69,15 @@ main() {
   if target="$(find_window "$id")"; then
     tmux_cmd kill-window -t "$target"
   fi
+
+  # Events before the meta goes (the writer resolves the project from it).
+  # The rm glob never touches state/tasks/ — event logs are retained.
+  if [ "$kind" = "research" ] && [ -s "$EM_DATA/$id/report.md" ]; then
+    emit_event "$id" report_delivered --actor em \
+      --data "$(jq -cn --arg r "data/$id/report.md" '{report: $r}' 2>/dev/null || true)"
+  fi
+  emit_event "$id" teardown_completed --actor em
+  emit_event "$id" task_closed --actor em
 
   rm -f "$EM_STATE/$id".* "$EM_STATE/.watch."*".$id"
   log "teardown of $id complete (data/$id/ kept)"

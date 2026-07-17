@@ -41,7 +41,12 @@ main() {
   if ! git -C "$proj" merge --ff-only --quiet "em/$id" 2>/dev/null; then
     die_refuse "em/$id is not a clean fast-forward of $branch — have the IC rebase onto $branch, then retry"
   fi
-  log "fast-forwarded $branch to em/$id ($(git -C "$proj" rev-parse --short HEAD))"
+  local sha
+  sha="$(git -C "$proj" rev-parse --short HEAD)"
+  emit_event "$id" merge_approved --actor director
+  emit_event "$id" merged --actor em \
+    --data "$(jq -cn --arg branch "$branch" --arg sha "$sha" '{branch: $branch, sha: $sha}' 2>/dev/null || true)"
+  log "fast-forwarded $branch to em/$id ($sha)"
 }
 
 main "$@"

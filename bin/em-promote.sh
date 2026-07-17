@@ -24,6 +24,7 @@ main() {
   [ "$kind" = "research" ] || die "task $id is kind=$kind — only research tasks can be promoted"
 
   meta_set "$id" kind build
+  emit_event "$id" task_promoted --actor em
   log "task $id promoted to a build task (teardown protection restored)"
   cat <<'EOF'
 Relay to the IC (one line at a time, or via a notes file):
