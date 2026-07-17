@@ -5,4 +5,7 @@ projects/
 worktrees/
 config/
 
+# The README demo's staged sandbox fleet (see demo/README.md)
+demo/.fleet/
+
 .DS_Store

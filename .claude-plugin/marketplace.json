@@ -1,0 +1,14 @@
+{
+  "name": "engineering-manager-for-agents",
+  "owner": {
+    "name": "spaceguy101",
+    "url": "https://github.com/spaceguy101"
+  },
+  "plugins": [
+    {
+      "name": "engineering-manager",
+      "source": "./",
+      "description": "An Engineering Manager for a fleet of autonomous IC coding agents: dispatch, supervision, budgets, audit logs, and gated delivery — adopted inside your existing Claude Code setup via the /em skill."
+    }
+  ]
+}

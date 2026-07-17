@@ -8,8 +8,12 @@ running in its own tmux window against its own disposable git worktree.
 Finished work comes back as ready-to-review pull requests, approved local
 merges, or investigation reports.
 
-This is not an app, harness, skill, or CLI — it is a repository. Installing it
-is cloning it.
+This is not an app, harness, or CLI — it is a repository. Installing it is
+cloning it. Prefer to stay inside your existing setup? The same repo also
+installs as a **Claude Code plugin** with an `/em` skill — see
+[Install](#install).
+
+![The Director's view of a running fleet: status, task timeline, budgets, queue](demo/demo.gif)
 
 ## Why
 
@@ -28,6 +32,40 @@ its own disposable git worktree. Finished work comes back to you as
 ready-to-review PRs, approved local merges, or standalone investigation
 reports.
 
+## Why not built-in subagents?
+
+Coding harnesses increasingly ship native multi-agent features — Claude
+Code's subagents and background tasks, Cursor's background agents. They are
+the right tool for quick fan-out *inside one conversation* (parallel
+searches, a short side investigation), and the EM doesn't compete there.
+The EM exists for what they don't do:
+
+- **Sessions, not subcalls.** A native subagent lives inside its parent
+  session and dies with it. An IC here is a full interactive session in its
+  own tmux window — you can attach, watch it work, or type into it — and
+  the fleet keeps working while the EM itself is killed and relaunched. All
+  coordination state lives on disk, never in a context window.
+- **Isolated worktrees, not a shared checkout.** Parallel agents in one
+  workspace trample each other's edits. Every task here gets a disposable
+  `git worktree`, so three tasks on the same repo cannot collide, and
+  delivery is a branch/PR — not surprise edits in your working tree.
+- **Script-enforced policy, not prompt discipline.** The test+lint gate
+  before a PR, merge-only-on-your-word, teardown refusing to destroy
+  unlanded work, per-task budgets that pause a runaway IC, an append-only
+  audit log per task — these are enforced by the toolbelt (safety refusals
+  are a distinct exit code), not by hoping an agent remembers its
+  instructions.
+- **Outcomes with a paper trail.** Work arrives as a reviewable PR, an
+  approved local merge, or a report file — plus a per-task event log for
+  post-mortems — not as text scrolling by in a chat.
+- **Harness-agnostic ICs.** The workers can run on Claude Code, Cursor's
+  agent CLI, or any harness that passes the verification trial — mixed
+  per task, under one supervisor.
+
+Rule of thumb: subagents for minutes-long parallelism inside a
+conversation; the EM for project-shaped work — hours long, parallel across
+repos, safe to leave running unattended.
+
 ## Install
 
 Prerequisites: `git` (≥ 2.5), `tmux`, `jq` (task event logs and budgets), a
@@ -42,6 +80,21 @@ claude   # or your harness — the agent boots as the EM
 
 Then just tell the EM what you want done and in which repo. Clone project
 repositories into `projects/` (the EM can do this for you).
+
+### As a Claude Code plugin
+
+To adopt the EM inside an existing Claude Code setup — no repo-as-home-base
+commitment — install it as a plugin:
+
+```
+/plugin marketplace add spaceguy101/engineering-manager-for-agents
+/plugin install engineering-manager@engineering-manager-for-agents
+```
+
+Then invoke the `/em` skill in any session. Fleet state (projects, task
+records, logs) lives in `~/em-fleet` (override with `$EM_HOME`); the
+toolbelt and templates run from the installed plugin. Same scripts, same
+safety rails — only the home base moves.
 
 ## How it works
 
@@ -112,6 +165,16 @@ bin/em-budget.sh extend <task> wall=+30m   # raise the limit, resume the IC
 Elapsed time derives from the task's event log, so restarting the EM or the
 watcher never resets the clock.
 
+### Task queue
+
+`data/backlog.md` is the human-readable queue (In flight / Queued / Done),
+written exclusively through `bin/em-backlog.sh` so it stays as
+machine-checkable and restart-proof as the rest of the fleet state: `add`
+(with `--blocked-by` for work that must wait its turn), `start` at dispatch,
+`done` with the durable outcome (PR URL, local merge, report path),
+`unblocked` to list queued tasks whose blocker has landed, and `validate`
+(line grammar, duplicate ids, cross-check against live task records).
+
 ## Status
 
 **v1 is feature-complete** (all four PRD milestones):
@@ -136,6 +199,9 @@ AGENTS.md      the EM's instructions (CLAUDE.md symlinks to it)
 bin/           the toolbelt the EM drives
 templates/     IC brief scaffolds
 tests/         pure-bash test suite
+skills/        the /em skill for the Claude Code plugin install
+.claude-plugin/  plugin + marketplace manifests
+demo/          the README demo (VHS tape + staged fixture)
 data/, state/, projects/, worktrees/, config/   local, gitignored
 ```
 

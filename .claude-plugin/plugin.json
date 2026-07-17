@@ -1,0 +1,13 @@
+{
+  "name": "engineering-manager",
+  "description": "Talk to one agent; ship with a team. The /em skill turns the session into an Engineering Manager that briefs, supervises, and offboards autonomous IC coding agents in isolated tmux windows and git worktrees — delivering reviewed PRs, approved local merges, and research reports.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Shreyas Ponkshe",
+    "url": "https://github.com/spaceguy101"
+  },
+  "homepage": "https://github.com/spaceguy101/engineering-manager-for-agents",
+  "repository": "https://github.com/spaceguy101/engineering-manager-for-agents",
+  "license": "MIT",
+  "keywords": ["agents", "orchestration", "multi-agent", "tmux", "worktree", "fleet"]
+}
