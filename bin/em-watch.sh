@@ -7,25 +7,33 @@
 #
 # Reason lines (stdout):
 #   idle                    no tasks in flight — don't restart until dispatch
+#   budget <id>: <dim> exceeded — <action> (<used>/<limit>)
+#                           budget enforcement fired (action: paused, killed,
+#                           warn-only, or pause-failed); report to the
+#                           Director with the figures and a recommendation
 #   signal <id> [<id>…]     new status line(s); read the listed status files
 #   stale <id>              IC's turn ended without a status report; peek it
 #   check <id>: <output>    the task's state/<id>.check.sh fired; act on it
 #   heartbeat               mandatory full-fleet review
 #
-# Priority per poll: due per-task checks run before signal scanning (so
-# chatty ICs can't starve merge detection), then signals (coalesced within
-# EM_SIGNAL_GRACE), then stale detection, then the heartbeat. Heartbeats
-# back off exponentially (EM_HEARTBEAT doubling to EM_HEARTBEAT_MAX) while
-# they are the only wakes; any other wake resets the cadence. Touches the
-# liveness beacon (state/.last-watcher-beat) every poll — em-guard.sh warns
-# when it goes stale.
+# Priority per poll: budget metering/enforcement first (safety never queues
+# behind a merge poll; rate-limited per task by EM_BUDGET_INTERVAL), then
+# due per-task checks before signal scanning (so chatty ICs can't starve
+# merge detection), then signals (coalesced within EM_SIGNAL_GRACE), then
+# stale detection, then the heartbeat. Heartbeats back off exponentially
+# (EM_HEARTBEAT doubling to EM_HEARTBEAT_MAX) while they are the only
+# wakes; any other wake resets the cadence. Touches the liveness beacon
+# (state/.last-watcher-beat) every poll — em-guard.sh warns when it goes
+# stale.
 #
 # Tuning env vars (defaults): EM_POLL=15, EM_SIGNAL_GRACE=30,
 # EM_CHECK_INTERVAL=300, EM_CHECK_TIMEOUT=30, EM_HEARTBEAT=600,
-# EM_HEARTBEAT_MAX=7200.
+# EM_HEARTBEAT_MAX=7200, EM_BUDGET_INTERVAL=60.
 set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
+# shellcheck source=bin/lib/budget.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/budget.sh"
 
 POLL="${EM_POLL:-15}"
 SIGNAL_GRACE="${EM_SIGNAL_GRACE:-30}"
@@ -79,6 +87,15 @@ main() {
       printf 'idle\n'
       exit 0
     fi
+
+    # 0. Budget metering/enforcement (safety runs before everything else).
+    local breason
+    for id in $ids; do
+      breason="$(budget_pass "$id" "$now" || true)"
+      if [ -n "$breason" ]; then
+        fire "$breason"
+      fi
+    done
 
     # 1. Due per-task checks (before signals).
     for id in $ids; do

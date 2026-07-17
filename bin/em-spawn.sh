@@ -4,11 +4,18 @@
 #
 # Usage:
 #   em-spawn.sh <id> <repo> [<harness>] [--research]
+#              [--budget <spec>] [--on-exceed pause|kill|warn-only]
 #
 # Requires a filled brief at data/<id>/brief.md (no {TASK} placeholder left).
 # Creates the window in the current tmux session, or in a dedicated 'em'
 # session when running outside tmux. --research records kind=research (the
 # worktree is scratch; teardown requires the report instead).
+#
+# Spawn is the budget guarantee point (BUD-4): --budget here overrides a
+# brief-time declaration (and appends a Budget note to the brief); without
+# either, the task gets an unlimited budget.json and a one-time
+# budget_warning(unmetered) event. --on-exceed picks the hard-threshold
+# action (default pause).
 #
 # Harness resolves via em-harness.sh (request > config/crew-harness >
 # detected). claude ships verified; any other harness must be listed in
@@ -33,6 +40,8 @@
 set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
+# shellcheck source=bin/lib/budget.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/budget.sh"
 "$EM_BIN/em-guard.sh"
 
 # install_turn_end_hook <worktree> <id> — ADR-0003 spawn provisioning: a Stop
@@ -105,20 +114,35 @@ verify_launch() {
 }
 
 main() {
-  local id="" repo="" harness="" kind=build arg
-  for arg in "$@"; do
-    case "$arg" in
+  local id="" repo="" harness="" kind=build budget_spec="" on_exceed=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
       -h | --help) usage; exit 0 ;;
       --research) kind=research ;;
-      -*) die "unknown option '$arg'" ;;
+      --budget)
+        [ $# -ge 2 ] || die "--budget needs a value (e.g. wall=45m,tokens=1.5M)"
+        shift
+        budget_spec="$1"
+        ;;
+      --on-exceed)
+        [ $# -ge 2 ] || die "--on-exceed needs a value (pause|kill|warn-only)"
+        shift
+        on_exceed="$1"
+        case "$on_exceed" in
+          pause | kill | warn-only) ;;
+          *) die "unknown --on-exceed '$on_exceed' (pause|kill|warn-only)" ;;
+        esac
+        ;;
+      -*) die "unknown option '$1'" ;;
       *)
-        if [ -z "$id" ]; then id="$arg"
-        elif [ -z "$repo" ]; then repo="$arg"
-        elif [ -z "$harness" ]; then harness="$arg"
+        if [ -z "$id" ]; then id="$1"
+        elif [ -z "$repo" ]; then repo="$1"
+        elif [ -z "$harness" ]; then harness="$1"
         else usage >&2; exit 1
         fi
         ;;
     esac
+    shift
   done
   [ -n "$id" ] && [ -n "$repo" ] || { usage >&2; exit 1; }
   require_id "$id"
@@ -180,6 +204,25 @@ launch=$launch
 spawned=$(date +%Y-%m-%dT%H:%M:%S)
 EOF
 
+  # Budget guarantee point (BUD-4): every dispatched task has a snapshot.
+  local bj
+  bj="$(budget_path "$id" "$repo")"
+  if [ -n "$budget_spec" ]; then
+    local parsed
+    parsed="$(declare_budget "$id" "$repo" "$budget_spec" task "${on_exceed:-pause}")" ||
+      die "invalid --budget '$budget_spec' (want e.g. wall=45m,tokens=1.5M,cost=2.00)"
+    if ! grep -q '^## Budget' "$brief"; then
+      printf '\n## Budget (declared at dispatch)\n\nThis task has a resource envelope: %s.\nPrefer the smallest correct change that meets the brief. At 80%% of any limit\nyou will be warned in this window; at 100%% enforcement kicks in.\n' \
+        "$(budget_phrase "$parsed")" >> "$brief"
+    fi
+  elif [ ! -f "$bj" ]; then
+    write_budget_json "$id" "$repo" "" "" "" none "${on_exceed:-pause}"
+    emit_event "$id" budget_warning --actor em \
+      --data '{"reason": "unmetered", "note": "task dispatched without a budget"}'
+  elif [ -n "$on_exceed" ]; then
+    budget_update "$id" "$repo" ".on_exceed = \"$on_exceed\"" || true
+  fi
+
   create_task_window "$win" "$wt"
   local target
   target="$(find_window "$id")" || die "window $win vanished after creation"
@@ -188,7 +231,9 @@ EOF
 
   log "spawned $id in window $win"
   emit_event "$id" ic_spawned --actor em \
-    --data "$(jq -cn --arg h "$harness" --arg w "$win" '{harness: $h, window: $w}' 2>/dev/null || true)"
+    --data "$(jq -cn --arg h "$harness" --arg w "$win" \
+      --argjson b "$(jq -c '.limits' "$bj" 2>/dev/null || printf 'null')" \
+      '{harness: $h, window: $w, budget: $b}' 2>/dev/null || true)"
   verify_launch "$id" "$target"
   printf '%s\n' "$wt"
 }

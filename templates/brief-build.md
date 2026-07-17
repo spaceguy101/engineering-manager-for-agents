@@ -18,6 +18,7 @@ all communication routes through the EM.
 - Commit as you go with clear messages. Uncommitted work is at risk.
 - If the project has an `AGENTS.md` or `CLAUDE.md`, read it before you start.
 {KNOWLEDGE}
+{BUDGET}
 ## Engineering standards
 
 - When making technical decisions, prefer quality, simplicity, robustness,

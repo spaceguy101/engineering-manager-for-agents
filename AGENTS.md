@@ -52,7 +52,8 @@ PR, never straight to main.
   (`--errors-only`, `--follow`, `--json`). The log is the authoritative
   *history*; `state/` snapshot files stay the authoritative *current* state.
   **Consult the timeline before answering "what happened to task X"** —
-  never reconstruct history from conversation memory.
+  never reconstruct history from conversation memory. `budget.json` beside
+  it is the task's current budget snapshot (`bin/em-budget.sh show <id>`).
 - `projects/<name>` — cloned repos. READ-ONLY for you.
 - `worktrees/<id>` — one disposable worktree per task.
 - Task ids: short kebab slug + random suffix you invent, e.g. `fix-login-k3`.
@@ -208,8 +209,14 @@ entries — PRs, local main, and report files are the durable record.
    (including anything relevant from memory.md).
    The rest of the scaffold (branch, status protocol, delivery) is the
    contract — don't weaken it.
-2. **Spawn.** `bin/em-spawn.sh <id> <repo> [<harness>] [--research]`. Spawn
-   checks the pane ~5s after launch and prints a hint if a trust or
+2. **Spawn.** `bin/em-spawn.sh <id> <repo> [<harness>] [--research]
+   [--budget <spec>] [--on-exceed pause|kill|warn-only]`. **Always dispatch
+   with a budget unless the Director says otherwise** — `--budget wall=45m`
+   is a sensible default for routine tasks (units: `s`/`m`/`h`; also
+   `tokens=1.5M`, `cost=2.00`); a budget can equally be declared at brief
+   time (`em-brief.sh --budget`), and the IC sees its envelope in the brief.
+   An unbudgeted dispatch runs unmetered after a one-time notice event.
+   Spawn checks the pane ~5s after launch and prints a hint if a trust or
    bypass-permissions dialog is waiting — act on it (see harness notes).
    Still `bin/em-peek.sh <id>` within ~20s to confirm the IC is processing.
    Add the task to the backlog.
@@ -276,6 +283,15 @@ Handle wakes cheapest-first:
   (`bin/em-peek.sh <id>`) and apply the stuck-IC playbook.
 - `check <id>: <note>` — a per-task poll fired (e.g. "PR merged"). Act on it
   (post-merge: teardown, backlog, dispatch unblocked work).
+- `budget <id>: <dim> exceeded — <action> (<used>/<limit>)` — budget
+  enforcement fired; the IC is paused (or killed/left running, per the
+  task's `--on-exceed`). Run `bin/em-budget.sh show <id>`, then report to
+  the Director with the figures and a recommendation (extend / rebrief /
+  kill) and act only on their word — `bin/em-budget.sh extend <id>
+  wall=+30m` raises the limit and resumes a paused IC. Enforcement never
+  destroys work: worktree, branch, and window (except `kill`) are
+  untouched. The soft threshold (80%) only logs `budget_warning` and turns
+  the status column loud (`!`) — no wake, no Director report.
 - `heartbeat` — mandatory full-fleet review: start with `bin/em-status.sh`
   (one line per task: window liveness + last status), read any status file
   or peek any pane that looks off, check PR-ready tasks, reconcile the
@@ -387,8 +403,9 @@ lean on heartbeats and peeks for them.
   reach the Director.
 - Reaches the Director immediately: work ready for review (full PR URL),
   decisions needed, real blockers/failures after the playbook (with
-  evidence), anything destructive/irreversible/security-sensitive, needed
-  credentials.
+  evidence), a task that hit its budget (a paused IC waits on their call:
+  extend, rebrief, or kill), anything destructive/irreversible/
+  security-sensitive, needed credentials.
 - Never reaches the Director: auto-fixes, retries, routine progress. Batch
   non-urgent items into the next natural reply. Silence is fine.
 - Light manager flavor is welcome ("on it, boss"), but drop it entirely for

@@ -633,6 +633,77 @@ expect "--project disambiguates" "$BIN/em-timeline.sh" tst-amb --project loco
 expect_rc "task without a log fails plainly" 1 "$BIN/em-timeline.sh" tst-nolog
 rm -f "$EM_ROOT/state/tst-el1.meta" # nothing in flight for the watcher cases
 
+# ---------------------------------------------------------- budgets (BUD-α)
+note "lib/budget.sh — spec parsing and formatting"
+# shellcheck source=bin/lib/budget.sh
+source "$BIN/lib/budget.sh"
+expect "wall minutes parse" test "$(parse_budget_spec wall=45m)" = "wall_seconds=2700"
+expect "wall hours parse" test "$(parse_budget_spec wall=2h)" = "wall_seconds=7200"
+expect "wall seconds parse (test granularity)" test "$(parse_budget_spec wall=30s)" = "wall_seconds=30"
+expect "bare wall number means minutes" test "$(parse_budget_spec wall=45)" = "wall_seconds=2700"
+expect "fractional M tokens parse" test "$(parse_budget_spec tokens=1.5M)" = "tokens=1500000"
+expect "k tokens parse" test "$(parse_budget_spec tokens=800k)" = "tokens=800000"
+expect "cost normalized to a JSON number" test "$(parse_budget_spec cost=2)" = "cost_usd=2.00"
+expect "combined spec parses" \
+  test "$(parse_budget_spec wall=1m,tokens=800k | tr '\n' ' ')" = "wall_seconds=60 tokens=800000 "
+expect_rc "unknown dimension fails" 1 parse_budget_spec speed=11
+expect_rc "malformed wall fails" 1 parse_budget_spec wall=4x5
+expect_rc "malformed pair fails" 1 parse_budget_spec wall
+expect "fmt_duration humanizes hours" test "$(fmt_duration 3900)" = "1h05m"
+expect "fmt_tokens humanizes M" test "$(fmt_tokens 1500000)" = "1.5M"
+
+note "em-brief.sh --budget — envelope declared at brief time"
+"$BIN/em-brief.sh" tst-bu1 demo --budget wall=45m,tokens=1.5M >/dev/null
+BU1="$EM_ROOT/state/tasks/demo/tst-bu1/budget.json"
+expect "budget.json written at brief" test -f "$BU1"
+expect "limits recorded" \
+  jq -e '.limits.wall_seconds == 2700 and .limits.tokens == 1500000 and .source == "task"' "$BU1"
+expect "brief renders the budget section" \
+  grep -q 'resource envelope: wall-clock 45m, tokens 1.5M' "$EM_ROOT/data/tst-bu1/brief.md"
+expect "no unrendered {BUDGET} placeholder" \
+  test -z "$(grep -F '{BUDGET}' "$EM_ROOT/data/tst-bu1/brief.md")"
+expect "task_created carries the declared budget" \
+  jq -e '.data.budget == "wall=45m,tokens=1.5M"' \
+  <(grep '"event":"task_created"' "$EM_ROOT/state/tasks/demo/tst-bu1/events.jsonl")
+expect "budgetless brief leaves no placeholder either" \
+  test -z "$(grep -F '{BUDGET}' "$EM_ROOT/data/tst-b1/brief.md")"
+expect_rc "malformed --budget dies" 1 "$BIN/em-brief.sh" tst-bu2 demo --budget wall=nope
+
+note "em-status.sh — BUDGET column"
+fake_meta tst-bc1 demo
+write_budget_json tst-bc1 demo 2700 "" "" task pause
+out="$("$BIN/em-status.sh" 2>/dev/null)"
+expect "BUDGET column header present" grep -q ' BUDGET ' <<< "$out"
+expect "budget cell shows used/limit" grep -qE 'tst-bc1 .* 0s/45m ' <<< "$out"
+budget_update tst-bc1 demo '.warned.wall = true'
+expect "soft-warned cell gains !" \
+  grep -qE 'tst-bc1 .* 0s/45m! ' <("$BIN/em-status.sh" 2>/dev/null)
+budget_update tst-bc1 demo '.state = "paused"'
+expect "latched cell gains !!" \
+  grep -qE 'tst-bc1 .* 0s/45m!! ' <("$BIN/em-status.sh" 2>/dev/null)
+rm -f "$EM_ROOT/state/tst-bc1.meta"
+
+note "budgets — soft threshold warns once (deterministic, crafted clock)"
+fake_meta tst-sw1 demo
+write_budget_json tst-sw1 demo 100 "" "" task pause
+mkdir -p "$TASKS/demo/tst-sw1"
+# 85s of the 100s limit already elapsed: past the 80% soft threshold.
+jq -cn --argjson ep "$(($(date +%s) - 85))" \
+  '{ts: "crafted", ts_epoch: $ep, task: "tst-sw1", project: "demo",
+    event: "ic_spawned", actor: "em", data: {}}' >> "$TASKS/demo/tst-sw1/events.jsonl"
+out="$(budget_pass tst-sw1 "$(date +%s)")"
+expect "soft threshold warns without firing a wake" test -z "$out"
+expect "budget_warning logged" \
+  grep -q '"event":"budget_warning"' "$TASKS/demo/tst-sw1/events.jsonl"
+expect "warned latch set" jq -e '.warned.wall == true' "$TASKS/demo/tst-sw1/budget.json"
+rm -f "$EM_ROOT/state/.watch.budget.tst-sw1"
+out="$(budget_pass tst-sw1 "$(date +%s)")"
+expect "second pass never re-warns" \
+  test "$(grep -c '"event":"budget_warning"' "$TASKS/demo/tst-sw1/events.jsonl")" = 1
+expect "spend cached for cheap display" \
+  jq -e '.spend.wall_seconds >= 85' "$TASKS/demo/tst-sw1/budget.json"
+rm -f "$EM_ROOT/state/tst-sw1.meta"
+
 # ------------------------------------------------------------- M2: em-watch
 note "em-watch.sh — signal/stale/check/heartbeat (fast timers)"
 watch_fast() {
@@ -706,6 +777,11 @@ EOF
   expect "window em-tst-s1 exists" find_window tst-s1
   expect "IC launched with the brief prompt" wait_for_pane tst-s1 FAKE_IC_READY
   expect_rc "spawn refuses a duplicate task" 1 "$BIN/em-spawn.sh" tst-s1 demo
+  expect "budgetless dispatch writes an unlimited snapshot" \
+    jq -e '.source == "none" and .limits.wall_seconds == null' \
+    "$EM_ROOT/state/tasks/demo/tst-s1/budget.json"
+  expect "one-time unmetered notice logged" \
+    grep -q '"reason":"unmetered"' "$EM_ROOT/state/tasks/demo/tst-s1/events.jsonl"
   # PR events for the LOG-5 lifecycle-chain assertion at teardown.
   "$BIN/em-pr-check.sh" tst-s1 https://github.com/o/r/pull/11 >/dev/null 2>&1
   PATH="$SANDBOX/fakegh:$PATH" bash "$EM_ROOT/state/tst-s1.check.sh" >/dev/null
@@ -742,6 +818,8 @@ EOF
   expect "full lifecycle event chain in order (LOG-5)" events_in_order "$S1EV" \
     task_created brief_written worktree_created ic_spawned pr_opened merged \
     teardown_refused teardown_completed task_closed
+  expect "em-budget show works on a closed task" \
+    grep -q 'source: none' <("$BIN/em-budget.sh" show tst-s1 2>/dev/null)
 
   note "research lifecycle — scratch worktree, report-gated teardown"
   "$BIN/em-brief.sh" tst-x3 demo --research >/dev/null
@@ -837,6 +915,109 @@ EOF
     "$BIN/em-spawn.sh" tst-tv1 demo 2>&1)"
   expect "spawn-check flags a trust dialog" grep -q 'trust dialog' <<< "$out"
   "$BIN/em-teardown.sh" tst-tv1 >/dev/null 2>&1
+
+  note "budgets — compressed-time pause enforcement (BUD-α flagship)"
+  watch_budget() {
+    env EM_POLL=1 EM_BUDGET_INTERVAL=1 EM_HEARTBEAT=60 "$BIN/em-watch.sh"
+  }
+  "$BIN/em-brief.sh" tst-bw1 demo >/dev/null
+  fill_task tst-bw1
+  "$BIN/em-spawn.sh" tst-bw1 demo --budget wall=3s >/dev/null 2>&1
+  BW1="$EM_ROOT/state/tasks/demo/tst-bw1/budget.json"
+  BWEV="$EM_ROOT/state/tasks/demo/tst-bw1/events.jsonl"
+  expect "spawn-time --budget recorded" jq -e '.limits.wall_seconds == 3' "$BW1"
+  expect "dispatch budget note appended to the brief" \
+    grep -q '## Budget (declared at dispatch)' "$EM_ROOT/data/tst-bw1/brief.md"
+  expect "IC started" wait_for_pane tst-bw1 FAKE_IC_READY
+  rm -f "$EM_ROOT/state/.watch."*
+  bout=""
+  for _ in 1 2 3 4 5; do
+    out="$(run_bounded 20 watch_budget)"
+    case "$out" in budget*)
+      bout="$out"
+      break
+      ;;
+    esac
+  done
+  expect "budget wake fires with the documented grammar" \
+    grep -qE '^budget tst-bw1: wall exceeded — paused \([0-9]+[sm]/3s\)$' <<< "$bout"
+  expect "budget_exceeded carries notify:true" \
+    jq -e '.notify == true' <(grep '"event":"budget_exceeded"' "$BWEV" | head -n 1)
+  expect "task_paused carries notify:true" \
+    jq -e '.notify == true' <(grep '"event":"task_paused"' "$BWEV" | head -n 1)
+  expect "snapshot latched to paused" jq -e '.state == "paused"' "$BW1"
+  pane_tty="$(tmux_cmd display-message -p -t "$(find_window tst-bw1)" '#{pane_tty}')"
+  ic_state() {
+    ps -t "${pane_tty#/dev/}" -o state=,comm= 2>/dev/null |
+      awk '$2 ~ /sleep/ { print substr($1, 1, 1); exit }'
+  }
+  expect "IC process actually stopped (SIGSTOP)" test "$(ic_state)" = "T"
+  expect "enforcement preserves the worktree" test -d "$WT/tst-bw1"
+  expect "enforcement preserves the meta" test -f "$EM_ROOT/state/tst-bw1.meta"
+  rm -f "$EM_ROOT/state/.watch.next-beat"
+  out="$(run_bounded 20 env EM_POLL=1 EM_BUDGET_INTERVAL=1 EM_HEARTBEAT=2 \
+    EM_HEARTBEAT_MAX=8 "$BIN/em-watch.sh")"
+  expect "latched task never re-fires the budget wake" test "$out" = "heartbeat"
+  sleep 2 # guarantee a measurable paused interval for the elapsed check
+  el1="$(budget_elapsed_seconds tst-bw1 demo)"
+  t0="$(grep '"event":"ic_spawned"' "$BWEV" | head -n 1 | jq -r .ts_epoch)"
+  expect "paused time excluded from elapsed (BUD-9)" \
+    test "$el1" -lt "$(($(date +%s) - t0))"
+  rm -f "$EM_ROOT/state/.watch."*
+  el2="$(budget_elapsed_seconds tst-bw1 demo)"
+  expect "elapsed never resets across a watcher/EM restart" test "$el2" -ge "$el1"
+  expect "extend raises the limit and resumes" "$BIN/em-budget.sh" extend tst-bw1 wall=+1m
+  expect "budget_extended then task_resumed logged (actor director)" \
+    events_in_order "$BWEV" budget_extended task_resumed
+  expect "IC process running again" grep -qE '^[SRI]' <(ic_state)
+  expect "snapshot back to ok against the new limit" \
+    jq -e '.state == "ok" and .limits.wall_seconds == 63' "$BW1"
+  expect "show reports the new limit" grep -q '/ 1m' <("$BIN/em-budget.sh" show tst-bw1)
+  expect "director pause works" "$BIN/em-budget.sh" pause tst-bw1
+  expect "director pause logged with actor=director" \
+    jq -e '.actor == "director"' <(grep '"event":"task_paused"' "$BWEV" | tail -n 1)
+  expect "director resume works" "$BIN/em-budget.sh" resume tst-bw1
+  "$BIN/em-teardown.sh" tst-bw1 >/dev/null 2>&1
+
+  note "budgets — --on-exceed warn-only and kill"
+  "$BIN/em-brief.sh" tst-bw2 demo >/dev/null
+  fill_task tst-bw2
+  "$BIN/em-spawn.sh" tst-bw2 demo --budget wall=2s --on-exceed warn-only >/dev/null 2>&1
+  rm -f "$EM_ROOT/state/.watch."*
+  bout=""
+  for _ in 1 2 3 4 5; do
+    out="$(run_bounded 20 watch_budget)"
+    case "$out" in budget*)
+      bout="$out"
+      break
+      ;;
+    esac
+  done
+  expect "warn-only wake fires" \
+    grep -qE '^budget tst-bw2: wall exceeded — warn-only ' <<< "$bout"
+  expect "warn-only leaves the IC running" find_window tst-bw2
+  expect "warn-only latches state=exceeded" \
+    jq -e '.state == "exceeded"' "$EM_ROOT/state/tasks/demo/tst-bw2/budget.json"
+  "$BIN/em-teardown.sh" tst-bw2 >/dev/null 2>&1
+  "$BIN/em-brief.sh" tst-bw3 demo >/dev/null
+  fill_task tst-bw3
+  "$BIN/em-spawn.sh" tst-bw3 demo --budget wall=2s --on-exceed kill >/dev/null 2>&1
+  rm -f "$EM_ROOT/state/.watch."*
+  bout=""
+  for _ in 1 2 3 4 5; do
+    out="$(run_bounded 20 watch_budget)"
+    case "$out" in budget*)
+      bout="$out"
+      break
+      ;;
+    esac
+  done
+  expect "kill wake fires" grep -qE '^budget tst-bw3: wall exceeded — killed ' <<< "$bout"
+  expect_rc "kill removes the window" 1 find_window tst-bw3
+  expect "kill preserves the worktree (never destroys work)" test -d "$WT/tst-bw3"
+  expect "task_killed logged" \
+    grep -q '"event":"task_killed"' "$EM_ROOT/state/tasks/demo/tst-bw3/events.jsonl"
+  "$BIN/em-teardown.sh" tst-bw3 >/dev/null 2>&1
 fi
 
 # ------------------------------------------------- em-reset: runs dead last

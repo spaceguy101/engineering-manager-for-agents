@@ -29,6 +29,7 @@ never open a PR.
   UI that looks off) belong in the report too, so they can be queued as
   their own tasks.
 {KNOWLEDGE}
+{BUDGET}
 ## Writing conventions
 
 - Use plain dashes, never em dashes.

@@ -86,6 +86,25 @@ task, `--json` is the raw stream, and `--since <iso|epoch>` bounds it. The
 log is the durable record for post-mortems and dashboards; deleting it takes
 an explicit `em-teardown.sh --purge-logs` (or a factory reset).
 
+### Budgets
+
+Every task can carry a resource envelope, so the fleet is safe to run
+unattended: `--budget wall=45m,tokens=1.5M,cost=2.00` at brief or dispatch
+time (units `s`/`m`/`h` and `k`/`M`). The zero-cost watcher meters spend on
+its existing wake-ups — wall-clock ships today; token metering per harness
+adapter lands next. At 80% of any limit the task's status column turns loud
+and a `budget_warning` is logged; at 100% the IC is **paused**
+(SIGSTOP — no work is ever destroyed) and the EM reports with a
+recommendation. `--on-exceed kill|warn-only` picks a different action.
+
+```sh
+bin/em-budget.sh show <task>            # limits, live spend, %, state
+bin/em-budget.sh extend <task> wall=+30m   # raise the limit, resume the IC
+```
+
+Elapsed time derives from the task's event log, so restarting the EM or the
+watcher never resets the clock.
+
 ## Status
 
 **v1 is feature-complete** (all four PRD milestones):

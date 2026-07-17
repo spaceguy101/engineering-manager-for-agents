@@ -5,6 +5,7 @@
 #
 # Usage:
 #   em-brief.sh <id> <repo> [--research] [--force]
+#              [--budget <spec>]   e.g. --budget wall=45m,tokens=1.5M,cost=2.00
 #
 # Build: renders templates/brief-build.md to data/<id>/brief.md, splicing in
 # the delivery section for the project's mode (templates/delivery-<mode>.md).
@@ -21,25 +22,37 @@
 # The {TASK} placeholder is left for the EM to fill in (description,
 # acceptance criteria, constraints) before spawning. Refuses to overwrite an
 # existing brief unless --force is given.
+# --budget declares the task's resource envelope (BUD-4): it is written to
+# state/tasks/<repo>/<id>/budget.json and rendered into the brief's {BUDGET}
+# section so the IC knows its limits. Spawn is the guarantee point — a task
+# briefed without a budget can still get one at em-spawn.sh time.
 set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
+# shellcheck source=bin/lib/budget.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/budget.sh"
 
 main() {
-  local id="" repo="" force=0 research=0 arg
-  for arg in "$@"; do
-    case "$arg" in
+  local id="" repo="" force=0 research=0 budget_spec=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
       --research) research=1 ;;
       --force) force=1 ;;
+      --budget)
+        [ $# -ge 2 ] || die "--budget needs a value (e.g. wall=45m,tokens=1.5M)"
+        shift
+        budget_spec="$1"
+        ;;
       -h | --help) usage; exit 0 ;;
-      -*) die "unknown option '$arg'" ;;
+      -*) die "unknown option '$1'" ;;
       *)
-        if [ -z "$id" ]; then id="$arg"
-        elif [ -z "$repo" ]; then repo="$arg"
+        if [ -z "$id" ]; then id="$1"
+        elif [ -z "$repo" ]; then repo="$1"
         else usage >&2; exit 1
         fi
         ;;
     esac
+    shift
   done
   [ -n "$id" ] && [ -n "$repo" ] || { usage >&2; exit 1; }
   require_id "$id"
@@ -91,10 +104,20 @@ main() {
     fi
   fi
 
+  local budget_section=""
+  if [ -n "$budget_spec" ]; then
+    local parsed
+    parsed="$(declare_budget "$id" "$repo" "$budget_spec" task pause)" ||
+      die "invalid --budget '$budget_spec' (want e.g. wall=45m,tokens=1.5M,cost=2.00)"
+    budget_section="$(printf '\n## Budget\n\nThis task has a resource envelope: %s.\nPrefer the smallest correct change that meets the brief. At 80%% of any limit\nyou will be warned in this window; at 100%% enforcement kicks in (default:\nthe task is paused until your manager extends the budget).\n' \
+      "$(budget_phrase "$parsed")")"
+  fi
+
   local content
   content="$(<"$tpl")"
   [ -n "$dtpl" ] && content="${content//\{DELIVERY\}/$(<"$dtpl")}"
   content="${content//\{KNOWLEDGE\}/$knowledge}"
+  content="${content//\{BUDGET\}/$budget_section}"
   content="${content//\{ID\}/$id}"
   content="${content//\{REPO\}/$repo}"
   content="${content//\{BRANCH\}/em/$id}"
@@ -113,8 +136,9 @@ main() {
     emit_event "$id" rebrief --actor em --project "$repo" --data '{"force": true}'
   else
     emit_event "$id" task_created --actor em --project "$repo" \
-      --data "$(jq -cn --arg kind "$kind" --arg mode "${mode:-}" \
-        '{kind: $kind, mode: (if $mode == "" then null else $mode end)}' 2>/dev/null || true)"
+      --data "$(jq -cn --arg kind "$kind" --arg mode "${mode:-}" --arg budget "$budget_spec" \
+        '{kind: $kind, mode: (if $mode == "" then null else $mode end),
+          budget: (if $budget == "" then null else $budget end)}' 2>/dev/null || true)"
   fi
   emit_event "$id" brief_written --actor em --project "$repo" \
     --data "$(jq -cn --arg t "$(basename "$tpl")" '{template: $t}' 2>/dev/null || true)"

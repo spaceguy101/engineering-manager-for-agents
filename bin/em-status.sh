@@ -6,17 +6,21 @@
 #
 # Columns: id, project, kind/mode, pane state (busy|idle|dead), the last
 # audit-log event with its age (e.g. gate_failed+3m, from
-# state/tasks/<project>/<id>/events.jsonl; "-" without a log), and the
-# task's last status line, with the recorded PR URL appended when one is
-# armed. busy = the pane matches EM_BUSY_REGEX (the default covers claude's
-# "esc to interrupt" and cursor's "Running <n> tokens" working indicators;
-# extend it when verifying other harnesses).
+# state/tasks/<project>/<id>/events.jsonl; "-" without a log), the budget
+# cell (38m/45m; ! past the soft threshold, !! once enforcement latched;
+# "-" unmetered), and the task's last status line, with the recorded PR URL
+# appended when one is armed. busy = the pane matches EM_BUSY_REGEX (the
+# default covers claude's "esc to interrupt" and cursor's
+# "Running <n> tokens" working indicators; extend it when verifying other
+# harnesses).
 # Cheap by design: pane content is only pattern-matched for the busy check,
 # never printed (that's em-peek.sh). Prints "no tasks in flight" when the
 # fleet is idle. The first stop for recovery and every heartbeat review.
 set -euo pipefail
 # shellcheck source=bin/lib/common.sh
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
+# shellcheck source=bin/lib/budget.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/lib/budget.sh"
 "$EM_BIN/em-guard.sh"
 
 # age_fmt <seconds> — compact age: 42s, 7m, 3h, 2d.
@@ -62,8 +66,8 @@ main() {
 
   local busy_re="${EM_BUSY_REGEX:-esc to interrupt|Running +[0-9]+ tokens}"
 
-  printf '%-18s %-14s %-18s %-5s %-20s %s\n' ID PROJECT KIND/MODE PANE EVENT 'LAST STATUS'
-  local id project kind mode pr target win last event
+  printf '%-18s %-14s %-18s %-5s %-20s %-13s %s\n' ID PROJECT KIND/MODE PANE EVENT BUDGET 'LAST STATUS'
+  local id project kind mode pr target win last event budget
   for id in $ids; do
     project="$(meta_get "$id" project || true)"
     kind="$(meta_get "$id" kind || true)"
@@ -82,10 +86,11 @@ main() {
       win=dead
     fi
     event="$(last_event_cell "$id" "$project")"
+    budget="$(budget_cell "$id" "$project")"
     last="$(tail -n 1 "$EM_STATE/$id.status" 2>/dev/null || true)"
     [ -n "$last" ] || last='-'
     [ -z "$pr" ] || last="$last  [pr: $pr]"
-    printf '%-18s %-14s %-18s %-5s %-20s %s\n' "$id" "$project" "$kind/$mode" "$win" "$event" "$last"
+    printf '%-18s %-14s %-18s %-5s %-20s %-13s %s\n' "$id" "$project" "$kind/$mode" "$win" "$event" "$budget" "$last"
   done
 }
 

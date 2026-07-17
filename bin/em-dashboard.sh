@@ -15,10 +15,11 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
 
 COLOR=0
 
-# Tint the status table when on a terminal: red for a dead pane, yellow for
-# a task waiting on attention. Field 4 is PANE, field 5 is EVENT, field 6
-# starts LAST STATUS (ids/projects/kind-mode/event cells never contain
-# spaces).
+# Tint the status table when on a terminal: red for a dead pane or an
+# enforced budget (!!), yellow for a soft-warned budget (!) or a task
+# waiting on attention. Field 4 is PANE, field 5 is EVENT, field 6 is
+# BUDGET, field 7 starts LAST STATUS (ids/projects/kind-mode/event/budget
+# cells never contain spaces).
 colorize() {
   if [ "$COLOR" -ne 1 ]; then
     cat
@@ -27,7 +28,9 @@ colorize() {
   awk '
     NR == 1 { print; next }
     $4 == "dead" { printf "\033[31m%s\033[0m\n", $0; next }
-    $6 ~ /^(blocked|failed|needs-decision):/ { printf "\033[33m%s\033[0m\n", $0; next }
+    $6 ~ /!!$/ { printf "\033[31m%s\033[0m\n", $0; next }
+    $6 ~ /!$/ { printf "\033[33m%s\033[0m\n", $0; next }
+    $7 ~ /^(blocked|failed|needs-decision):/ { printf "\033[33m%s\033[0m\n", $0; next }
     { print }'
 }
 
