@@ -28,6 +28,8 @@
 #                  fails the caller (logging is best-effort by design)
 #   default_branch resolve origin's default branch name for a clone
 #   mtime                file modification epoch (portable macOS/Linux)
+#   watcher_beacon_status   classify the watcher liveness beacon
+#                        (fresh|missing|stale); shared by the guards
 #   run_bounded          run a command with a kill-after timeout (no GNU
 #                        timeout dependency)
 #   in_flight_ids        ids of every task with a state/<id>.meta record
@@ -193,6 +195,29 @@ emit_event() {
 # mtime <file> — modification time as epoch seconds (BSD and GNU stat).
 mtime() {
   stat -f %m -- "$1" 2>/dev/null || stat -c %Y -- "$1" 2>/dev/null
+}
+
+# watcher_beacon_status [grace-seconds] — classify the watcher liveness beacon
+# (state/.last-watcher-beat, touched every poll by em-watch.sh). The single
+# source of truth for "is supervision live", shared by em-guard.sh (which warns)
+# and em-turnend-guard.sh (which blocks). Prints one of:
+#   fresh                         beacon younger than the grace window
+#   missing                       no beacon at all
+#   stale <age>s (grace <g>s)     beacon older than the grace window
+# and returns 0 for fresh, 1 otherwise. Grace defaults to EM_GUARD_GRACE or 300.
+watcher_beacon_status() {
+  local grace="${1:-${EM_GUARD_GRACE:-300}}" beacon="$EM_STATE/.last-watcher-beat" age
+  if [ ! -f "$beacon" ]; then
+    printf 'missing\n'
+    return 1
+  fi
+  age=$(($(date +%s) - $(mtime "$beacon")))
+  if [ "$age" -gt "$grace" ]; then
+    printf 'stale %ss (grace %ss)\n' "$age" "$grace"
+    return 1
+  fi
+  printf 'fresh\n'
+  return 0
 }
 
 # run_bounded <seconds> <cmd…> — run a command, killing it after <seconds>.

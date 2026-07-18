@@ -542,6 +542,56 @@ out="$(EM_GUARD_GRACE=0 "$BIN/em-guard.sh" 2>&1)"
 expect "warns when the beacon is older than the grace" grep -q beacon <<< "$out"
 rm -f "$EM_ROOT/state/tst-g1.meta"
 
+note "em-turnend-guard.sh — push-based turn-end backstop (Stop hook)"
+TEG="$BIN/em-turnend-guard.sh"
+TEG_ROOT="$SANDBOX/teg" # isolated fleet root so nothing else pollutes it
+mkdir -p "$TEG_ROOT/state"
+TEG_BEACON="$TEG_ROOT/state/.last-watcher-beat"
+# teg_rc <payload> [extra env=val…] — exit code of the guard fed <payload> on
+# stdin, under EM_ROOT=$TEG_ROOT (a later EM_ROOT= override wins).
+teg_rc() {
+  local payload="$1" rc=0
+  shift
+  printf '%s' "$payload" | env EM_ROOT="$TEG_ROOT" "$@" "$TEG" >/dev/null 2>&1 || rc=$?
+  printf '%s' "$rc"
+}
+ALIVE='{"stop_hook_active":false}'
+LOOP='{"stop_hook_active":true}'
+
+expect "empty payload fails open (allows the stop)" test "$(teg_rc '')" = 0
+expect "no tasks in flight: allows the stop" test "$(teg_rc "$ALIVE")" = 0
+
+printf 'window=em-tst-te1\n' > "$TEG_ROOT/state/tst-te1.meta"
+touch "$TEG_BEACON"
+expect "in flight + fresh beacon: allows the stop" test "$(teg_rc "$ALIVE")" = 0
+
+rm -f "$TEG_BEACON"
+expect "in flight + missing beacon: BLOCKS (exit 2)" test "$(teg_rc "$ALIVE")" = 2
+out="$(printf '%s' "$ALIVE" | env EM_ROOT="$TEG_ROOT" "$TEG" 2>&1 >/dev/null)"
+expect "block message warns the turn would end blind" grep -q 'END BLIND' <<< "$out"
+expect "block message names the watcher restart" grep -q 'em-watch.sh' <<< "$out"
+
+expect "stop_hook_active=true allows despite the block condition (loop guard)" \
+  test "$(teg_rc "$LOOP")" = 0
+
+touch "$TEG_BEACON"; sleep 1
+expect "in flight + stale beacon: BLOCKS (exit 2)" \
+  test "$(teg_rc "$ALIVE" EM_GUARD_GRACE=0)" = 2
+
+# Scope: inert inside a linked worktree (an IC dispatched to work on EM itself),
+# the only other place this tracked hook is checked out. Same block condition
+# (in flight, no beacon) must be a silent no-op there.
+TEG_WTBASE="$SANDBOX/teg-wtrepo"
+git init -q -b main "$TEG_WTBASE"
+(cd "$TEG_WTBASE" && echo x > f && git add . && git commit -qm init) >/dev/null 2>&1
+git -C "$TEG_WTBASE" worktree add -q "$SANDBOX/teg-wtlinked" -b em/self >/dev/null 2>&1
+mkdir -p "$SANDBOX/teg-wtlinked/state"
+printf 'window=em-tst-te2\n' > "$SANDBOX/teg-wtlinked/state/tst-te2.meta"
+expect "linked worktree (IC on EM itself): no-op despite block condition" \
+  test "$(teg_rc "$ALIVE" EM_ROOT="$SANDBOX/teg-wtlinked")" = 0
+
+rm -rf "$TEG_ROOT"
+
 note "em-lock.sh — single-EM session lock"
 expect "acquire when unlocked" env EM_SESSION_PID=$$ "$BIN/em-lock.sh" acquire
 expect "status shows the holder" grep -q "pid=$$" <(env EM_SESSION_PID=$$ "$BIN/em-lock.sh" status)

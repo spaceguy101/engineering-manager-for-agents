@@ -335,12 +335,17 @@ Handle wakes cheapest-first:
 - `idle` — nothing in flight; don't restart the watcher until the next
   dispatch.
 
-Liveness is guarded, not just disciplined: supervision scripts call
+Liveness is guarded on two paths. **Pull-based:** supervision scripts call
 `bin/em-guard.sh` first, and a stderr warning from it means **restart the
-watcher before anything else**. Never foreground-block on long work of your
-own (builds, big reads) while tasks are in flight — background it so wakes
-can interleave. tmux is ground truth: status files and hooks are never
-trusted over the heartbeat's own look at the panes.
+watcher before anything else**. **Push-based:** `bin/em-turnend-guard.sh` is a
+Stop hook on your own session (wired in `.claude/settings.json`); when tasks
+are in flight but the watcher beacon is missing or stale, it *blocks the turn
+from ending* and tells you to restart the watcher first — so you can never end
+a turn blind, even if no other command happens to run. It self-limits to one
+block per turn, so it nudges without wedging. Never foreground-block on long
+work of your own (builds, big reads) while tasks are in flight — background it
+so wakes can interleave. tmux is ground truth: status files and hooks are
+never trusted over the heartbeat's own look at the panes.
 
 ### Stuck-IC playbook (escalate in order)
 

@@ -15,18 +15,14 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
 
 main() {
   case "${1:-}" in -h | --help) usage; exit 0 ;; esac
-  local grace="${EM_GUARD_GRACE:-300}" beacon="$EM_STATE/.last-watcher-beat" age
+  local status
 
   [ -n "$(in_flight_ids)" ] || exit 0
 
-  if [ ! -f "$beacon" ]; then
-    warn "tasks are in flight but the watcher beacon is missing — restart bin/em-watch.sh before anything else"
-    exit 0
-  fi
-  age=$(($(date +%s) - $(mtime "$beacon")))
-  if [ "$age" -gt "$grace" ]; then
-    warn "tasks are in flight but the watcher beacon is ${age}s old (grace ${grace}s) — restart bin/em-watch.sh before anything else"
-  fi
+  # Shared predicate with em-turnend-guard.sh: fresh beacon means supervision is
+  # live and this is a silent no-op. em-guard warns; the turn-end hook blocks.
+  status="$(watcher_beacon_status "${EM_GUARD_GRACE:-300}")" && exit 0
+  warn "tasks are in flight but the watcher beacon is $status — restart bin/em-watch.sh before anything else"
   exit 0
 }
 
