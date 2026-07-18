@@ -32,6 +32,33 @@ its own disposable git worktree. Finished work comes back to you as
 ready-to-review PRs, approved local merges, or standalone investigation
 reports.
 
+## How it works
+
+- **You (Director)** make decisions, approve merges, and can watch or type
+  into any IC's tmux window at any time.
+- **The EM** never edits project code itself. It briefs an IC per task, spawns
+  it in an isolated `git worktree` (parallel tasks on the same repo cannot
+  collide), supervises it, and reports outcomes.
+- **Safety is script-enforced**, not just prompted: the EM is read-only over
+  `projects/`, never merges without your word, and teardown refuses to destroy
+  work that hasn't landed on a remote.
+- All durable state lives on disk (`data/`, `state/`) — killing and
+  relaunching the EM is a non-event.
+- **Per-project memory and knowledge base:** the EM keeps what it learns
+  about each project in `data/projects/<name>/memory.md`, and you can drop
+  architecture docs and standing instructions into
+  `data/projects/<name>/kb/` (or hand them to the EM to file) — every IC
+  brief for that project lists those docs as required reading.
+- **Visibility without asking:** `bin/em-status.sh` prints a one-screen fleet
+  overview and `bin/em-dashboard.sh` is its live, self-refreshing version —
+  both read-only and safe for the Director to run in any terminal. To watch
+  an IC work, attach to its tmux window (`tmux attach -t em` when the fleet
+  runs in the dedicated background session). Whether new IC windows are
+  surfaced into view or kept in the background is your standing call —
+  `config/ic-window` records it (`ask` per dispatch, `surface` always, or
+  `bg` always), and the EM asks you before the first dispatch if it is
+  unset.
+
 ## Install
 
 Prerequisites: `git` (≥ 2.5), `tmux`, `jq` (task event logs and budgets), a
@@ -61,33 +88,6 @@ Then invoke the `/em` skill in any session. Fleet state (projects, task
 records, logs) lives in `~/em-fleet` (override with `$EM_HOME`); the
 toolbelt and templates run from the installed plugin. Same scripts, same
 safety rails — only the home base moves.
-
-## How it works
-
-- **You (Director)** make decisions, approve merges, and can watch or type
-  into any IC's tmux window at any time.
-- **The EM** never edits project code itself. It briefs an IC per task, spawns
-  it in an isolated `git worktree` (parallel tasks on the same repo cannot
-  collide), supervises it, and reports outcomes.
-- **Safety is script-enforced**, not just prompted: the EM is read-only over
-  `projects/`, never merges without your word, and teardown refuses to destroy
-  work that hasn't landed on a remote.
-- All durable state lives on disk (`data/`, `state/`) — killing and
-  relaunching the EM is a non-event.
-- **Per-project memory and knowledge base:** the EM keeps what it learns
-  about each project in `data/projects/<name>/memory.md`, and you can drop
-  architecture docs and standing instructions into
-  `data/projects/<name>/kb/` (or hand them to the EM to file) — every IC
-  brief for that project lists those docs as required reading.
-- **Visibility without asking:** `bin/em-status.sh` prints a one-screen fleet
-  overview and `bin/em-dashboard.sh` is its live, self-refreshing version —
-  both read-only and safe for the Director to run in any terminal. To watch
-  an IC work, attach to its tmux window (`tmux attach -t em` when the fleet
-  runs in the dedicated background session). Whether new IC windows are
-  surfaced into view or kept in the background is your standing call —
-  `config/ic-window` records it (`ask` per dispatch, `surface` always, or
-  `bg` always), and the EM asks you before the first dispatch if it is
-  unset.
 
 ### Task timeline
 
