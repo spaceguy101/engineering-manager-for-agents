@@ -7,7 +7,7 @@
 Output demo/demo.gif
 
 Set Shell "bash"
-Set FontSize 13
+Set FontSize 14
 Set Width 1560
 Set Height 700
 Set Padding 16
