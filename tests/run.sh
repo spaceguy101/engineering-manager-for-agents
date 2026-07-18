@@ -85,6 +85,13 @@ wait_for_pane() {
   return 1
 }
 
+# active_em_window — name of the active window in the detached 'em' session
+# (surfaced spawns select their window; background spawns leave it alone).
+active_em_window() {
+  tmux_cmd list-windows -t '=em' -F '#{window_active} #{window_name}' |
+    awk '$1 == 1 { print $2 }'
+}
+
 # events_in_order <events.jsonl> <ev1> <ev2>… — the named events appear in
 # this order in the log (other events may interleave).
 events_in_order() {
@@ -501,6 +508,15 @@ expect "cursor check targets the agent binary, never the IDE name" \
   test -z "$(grep -F 'missing: cursor (' <<< "$out")"
 rm -f "$EM_ROOT/config/crew-harness"
 out="$("$BIN/em-bootstrap.sh" 2>&1)"
+expect "flags an unset IC window policy" grep -q 'ic-window: unset' <<< "$out"
+echo bogus > "$EM_ROOT/config/ic-window"
+out="$("$BIN/em-bootstrap.sh" 2>&1)"
+expect "flags an invalid IC window policy" grep -q 'ic-window: invalid value bogus' <<< "$out"
+echo surface > "$EM_ROOT/config/ic-window"
+out="$("$BIN/em-bootstrap.sh" 2>&1)"
+expect "a valid IC window policy is silent" test -z "$(grep 'ic-window:' <<< "$out")"
+rm -f "$EM_ROOT/config/ic-window"
+out="$("$BIN/em-bootstrap.sh" 2>&1)"
 expect "flags an unregistered clone" grep -q 'registry: projects/unreg has no registry line' <<< "$out"
 expect "registered clones are not flagged" test -z "$(grep 'registry: projects/demo ' <<< "$out")"
 echo '- broken2 [nope] - bad line' >> "$EM_ROOT/data/projects.md"
@@ -827,6 +843,15 @@ EOF
   expect_rc "spawn refuses a missing brief" 1 "$BIN/em-spawn.sh" tst-s9 demo
   expect_rc "spawn refuses unverified harnesses" 1 \
     env -u EM_LAUNCH_OVERRIDE "$BIN/em-spawn.sh" tst-s1 demo codex
+  expect_rc "spawn refuses without a window policy or flag" 1 \
+    "$BIN/em-spawn.sh" tst-s1 demo
+  echo ask > "$EM_ROOT/config/ic-window"
+  expect_rc "spawn refuses under an 'ask' policy with no flag" 1 \
+    "$BIN/em-spawn.sh" tst-s1 demo
+  expect_rc "spawn refuses two conflicting visibility flags" 1 \
+    "$BIN/em-spawn.sh" tst-s1 demo --surface --bg
+  # A background standing policy covers the remaining lifecycle cases.
+  echo bg > "$EM_ROOT/config/ic-window"
 
   expect "spawn succeeds with a filled brief" "$BIN/em-spawn.sh" tst-s1 demo
   META="$EM_ROOT/state/tst-s1.meta"
@@ -841,6 +866,9 @@ EOF
     grep -qxF '.claude/settings.local.json' "$EM_ROOT/projects/demo/.git/info/exclude"
   expect "window em-tst-s1 exists" find_window tst-s1
   expect "IC launched with the brief prompt" wait_for_pane tst-s1 FAKE_IC_READY
+  expect "bg policy leaves the window unsurfaced" test "$(active_em_window)" != em-tst-s1
+  expect "ic_spawned records surfaced=false under bg" \
+    grep -q '"surfaced":false' "$EM_ROOT/state/tasks/demo/tst-s1/events.jsonl"
   expect_rc "spawn refuses a duplicate task" 1 "$BIN/em-spawn.sh" tst-s1 demo
   expect "budgetless dispatch writes an unlimited snapshot" \
     jq -e '.source == "none" and .limits.wall_seconds == null' \
@@ -850,6 +878,24 @@ EOF
   # PR events for the LOG-5 lifecycle-chain assertion at teardown.
   "$BIN/em-pr-check.sh" tst-s1 https://github.com/o/r/pull/11 >/dev/null 2>&1
   PATH="$SANDBOX/fakegh:$PATH" bash "$EM_ROOT/state/tst-s1.check.sh" >/dev/null
+
+  note "em-spawn.sh — window visibility (flag overrides policy)"
+  "$BIN/em-brief.sh" tst-sv demo >/dev/null
+  fill_task tst-sv
+  # Standing policy is bg, but the per-dispatch --surface flag wins.
+  expect "spawn --surface succeeds despite the bg policy" \
+    "$BIN/em-spawn.sh" tst-sv demo --surface
+  expect "--surface makes the IC window active" test "$(active_em_window)" = em-tst-sv
+  expect "ic_spawned records surfaced=true under --surface" \
+    grep -q '"surfaced":true' "$EM_ROOT/state/tasks/demo/tst-sv/events.jsonl"
+  "$BIN/em-brief.sh" tst-sb demo >/dev/null
+  fill_task tst-sb
+  # An 'ask' policy still dispatches when the flag decides it.
+  echo ask > "$EM_ROOT/config/ic-window"
+  expect "spawn --bg succeeds under an 'ask' policy" \
+    "$BIN/em-spawn.sh" tst-sb demo --bg
+  expect "--bg does not steal the active window" test "$(active_em_window)" = em-tst-sv
+  echo bg > "$EM_ROOT/config/ic-window"
 
   note "em-send.sh / em-peek.sh — against a plain shell window"
   tmux_cmd new-window -d -t '=em:' -n em-tst-io -c "$SANDBOX" 'bash --norc -i' 2>/dev/null ||

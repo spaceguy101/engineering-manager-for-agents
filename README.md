@@ -117,7 +117,11 @@ safety rails — only the home base moves.
   overview and `bin/em-dashboard.sh` is its live, self-refreshing version —
   both read-only and safe for the Director to run in any terminal. To watch
   an IC work, attach to its tmux window (`tmux attach -t em` when the fleet
-  runs in the dedicated background session).
+  runs in the dedicated background session). Whether new IC windows are
+  surfaced into view or kept in the background is your standing call —
+  `config/ic-window` records it (`ask` per dispatch, `surface` always, or
+  `bg` always), and the EM asks you before the first dispatch if it is
+  unset.
 
 ### Task timeline
 

@@ -18,6 +18,9 @@
 #   inside_tmux    running inside a usable tmux session
 #   create_task_window   new detached window for a task, in the current
 #                        session or the dedicated 'em' session
+#   ic_window_policy     the Director's standing window choice from
+#                        config/ic-window (ask|surface|bg); fails when unset
+#   surface_task_window  make a task's window the active one in its session
 #   find_window    print a tmux target for a task's window, in any session
 #   meta_path/meta_get/meta_set   accessors for state/<id>.meta (key=value)
 #   task_dir       per-task event/budget directory: state/tasks/<project>/<id>
@@ -117,6 +120,26 @@ create_task_window() {
       tmux_cmd new-session -d -s em -c "$EM_ROOT"
     tmux_cmd new-window -d -t '=em:' -n "$win" -c "$dir"
   fi
+}
+
+# ic_window_policy — the Director's standing choice for how IC windows
+# appear, read from config/ic-window: ask (put the question to the Director
+# at every dispatch), surface (bring each window into view), or bg (leave
+# them in background). Prints the recorded word; fails when the file is
+# missing or blank. Callers validate the value.
+ic_window_policy() {
+  local v
+  [ -f "$EM_CONFIG/ic-window" ] || return 1
+  v="$(head -n1 "$EM_CONFIG/ic-window" | tr -d '[:space:]')"
+  [ -n "$v" ] || return 1
+  printf '%s\n' "$v"
+}
+
+# surface_task_window <target> — bring a task's window into view by making
+# it the active window of its session: visible immediately when the EM runs
+# inside tmux, pre-selected for `tmux attach -t em` otherwise.
+surface_task_window() {
+  tmux_cmd select-window -t "$1"
 }
 
 # Print "<session_id>:<window_index>" for a task's window, searching all

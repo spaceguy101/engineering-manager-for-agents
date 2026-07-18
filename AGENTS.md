@@ -67,7 +67,11 @@ PR, never straight to main.
    wait for consent, and install **only the approved set** — never install
    anything without this-session approval. `NEEDS_GH_AUTH` → ask the
    Director to run `gh auth login` interactively. `harness-override:` lines
-   are recorded silently. `registry:` lines mean the clones and the project
+   are recorded silently. An `ic-window:` line means the Director's standing
+   window preference is unset or invalid — ask them how IC windows should
+   appear (**ask** each dispatch, **surface** always, or **bg**: background
+   always) and record the one-word answer in `config/ic-window`; dispatch
+   refuses until it is settled. `registry:` lines mean the clones and the project
    registry have drifted (a clone with no registry line, or a malformed
    line) — re-register with the Director via `bin/em-project-add.sh`; until
    then that project cannot take build tasks. Fleet-sync skips are
@@ -219,8 +223,18 @@ PRs, local main, and report files are the durable record.
    The rest of the scaffold (branch, status protocol, delivery) is the
    contract — don't weaken it.
 2. **Spawn.** `bin/em-spawn.sh <id> <repo> [<harness>] [--research]
-   [--budget <spec>] [--on-exceed pause|kill|warn-only]`. **Always dispatch
-   with a budget unless the Director says otherwise** — `--budget wall=45m`
+   [--surface | --bg] [--budget <spec>] [--on-exceed pause|kill|warn-only]`.
+   **Window visibility is the Director's call.** `config/ic-window` holds
+   their standing choice: `surface` (every IC window is brought into view),
+   `bg` (every IC runs in a background window), or `ask`. Under `ask`, put
+   the question to the Director at every dispatch — offer the same three
+   options each time: surface this one, background this one, or make either
+   the standing rule (update `config/ic-window` on an "always" answer) —
+   then pass `--surface` or `--bg`. Spawn refuses to guess when the policy
+   is `ask` or unset; bootstrap surfaces an unset policy at session start so
+   you can settle it before the first dispatch.
+   **Always dispatch with a budget unless the Director says otherwise** —
+   `--budget wall=45m`
    is a sensible default for routine tasks (units: `s`/`m`/`h`; also
    `tokens=1.5M`, `cost=2.00`); a budget can equally be declared at brief
    time (`em-brief.sh --budget`), and the IC sees its envelope in the brief.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # em-bootstrap.sh — session-start detection: report missing toolchain pieces
 # (one line each, with the exact install command), GitHub auth state, a
-# harness override if configured, and registry drift (clones without a
-# registry line, malformed registry lines); then run a bounded best-effort
-# fleet sync.
+# harness override if configured, an unset/invalid IC window policy
+# (config/ic-window), and registry drift (clones without a registry line,
+# malformed registry lines); then run a bounded best-effort fleet sync.
 #
 # Usage:
 #   em-bootstrap.sh
@@ -55,6 +55,20 @@ main() {
 
   if [ -f "$EM_CONFIG/crew-harness" ]; then
     printf 'harness-override: %s\n' "$(head -n1 "$EM_CONFIG/crew-harness" | tr -d '[:space:]')"
+  fi
+
+  # IC window policy: whether new IC windows are surfaced into view or left
+  # in background is the Director's standing choice (or per-dispatch, with
+  # `ask`). em-spawn.sh refuses to dispatch without it — surface it here so
+  # the question is asked at session start, not mid-dispatch.
+  local winpol
+  if winpol="$(ic_window_policy)"; then
+    case "$winpol" in
+      ask | surface | bg) ;;
+      *) printf 'ic-window: invalid value %s in config/ic-window — want ask|surface|bg\n' "$winpol" ;;
+    esac
+  else
+    printf 'ic-window: unset — ask the Director how IC windows should appear (ask each dispatch | surface always | background always) and record ask|surface|bg in config/ic-window\n'
   fi
 
   # The harness new ICs would launch on must exist on this machine —
