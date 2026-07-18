@@ -32,40 +32,6 @@ its own disposable git worktree. Finished work comes back to you as
 ready-to-review PRs, approved local merges, or standalone investigation
 reports.
 
-## Why not built-in subagents?
-
-Coding harnesses increasingly ship native multi-agent features — Claude
-Code's subagents and background tasks, Cursor's background agents. They are
-the right tool for quick fan-out *inside one conversation* (parallel
-searches, a short side investigation), and the EM doesn't compete there.
-The EM exists for what they don't do:
-
-- **Sessions, not subcalls.** A native subagent lives inside its parent
-  session and dies with it. An IC here is a full interactive session in its
-  own tmux window — you can attach, watch it work, or type into it — and
-  the fleet keeps working while the EM itself is killed and relaunched. All
-  coordination state lives on disk, never in a context window.
-- **Isolated worktrees, not a shared checkout.** Parallel agents in one
-  workspace trample each other's edits. Every task here gets a disposable
-  `git worktree`, so three tasks on the same repo cannot collide, and
-  delivery is a branch/PR — not surprise edits in your working tree.
-- **Script-enforced policy, not prompt discipline.** The test+lint gate
-  before a PR, merge-only-on-your-word, teardown refusing to destroy
-  unlanded work, per-task budgets that pause a runaway IC, an append-only
-  audit log per task — these are enforced by the toolbelt (safety refusals
-  are a distinct exit code), not by hoping an agent remembers its
-  instructions.
-- **Outcomes with a paper trail.** Work arrives as a reviewable PR, an
-  approved local merge, or a report file — plus a per-task event log for
-  post-mortems — not as text scrolling by in a chat.
-- **Harness-agnostic ICs.** The workers can run on Claude Code, Cursor's
-  agent CLI, or any harness that passes the verification trial — mixed
-  per task, under one supervisor.
-
-Rule of thumb: subagents for minutes-long parallelism inside a
-conversation; the EM for project-shaped work — hours long, parallel across
-repos, safe to leave running unattended.
-
 ## Install
 
 Prerequisites: `git` (≥ 2.5), `tmux`, `jq` (task event logs and budgets), a
@@ -211,27 +177,8 @@ data/, state/, projects/, worktrees/, config/   local, gitignored
 
 ## Contributing
 
-Note that a coding agent launched in this repo boots as the EM by default, so
-developing the repo itself is a distinct mode of work. When your task is to
-modify the system (the `bin/` toolbelt, `AGENTS.md`, templates), a few
-conventions apply:
-
-- **Toolbelt:** 100% bash, macOS + Linux. Every script uses
-  `#!/usr/bin/env bash`, `set -euo pipefail`, and a header comment that
-  doubles as its `--help` text. Scripts are **shellcheck-clean** — run
-  `shellcheck` locally before shipping (there is no hosted CI: the suite
-  needs a real machine with tmux and an IC harness, so the gate is local).
-  Shared helpers live in `bin/lib/common.sh`.
-  Exit code **3** always means a safety refusal — stop and investigate, never
-  retry with `--force` on your own initiative.
-- **Tests:** `bash tests/run.sh` — pure bash, no framework. tmux-dependent
-  cases run on an isolated server and skip (not fail) when tmux is missing.
-  Every safety-refusal path has a test; the unlanded-work checks are the
-  flagship suite.
-- **Shared material** (the orchestrator, `bin/`, templates, README) ships
-  behind its own gate: feature branch → shellcheck + tests green locally →
-  PR → merge. The invariants in `AGENTS.md` are script-enforced; every
-  change must preserve them.
+Developing the repo itself is a distinct mode of work from running it as the
+EM — see [DEVELOPMENT.md](DEVELOPMENT.md) for the conventions.
 
 ## License
 

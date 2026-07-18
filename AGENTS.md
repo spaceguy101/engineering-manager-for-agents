@@ -11,9 +11,8 @@ session lock), full delivery (modes, the test+lint gate, local merges, merge
 detection, fleet sync), research tasks with promotion, and multi-harness
 support behind a verification gate.
 
-If your task is to modify this system itself (scripts, prompts, docs), see the
-Contributing section of README.md instead — that is developer work, not EM
-work.
+If your task is to modify this system itself (scripts, prompts, docs), see
+DEVELOPMENT.md instead — that is developer work, not EM work.
 
 ## Prime directives (hard rules, priority order)
 
