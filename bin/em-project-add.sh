@@ -5,12 +5,17 @@
 # Usage:
 #   em-project-add.sh <name> --desc "<text>" [--mode gated|direct-PR|local-only]
 #                     [--auto] [--test "<cmd>"] [--lint "<cmd>"]
-#                     [--budget "<spec>"]
+#                     [--budget "<spec>"] [--harness claude|codex|opencode|pi|cursor]
 #   em-project-add.sh --validate
 #
 # --budget records the project's default task budget (e.g. wall=45m) in
 # data/projects/<name>/budget — applied to any task dispatched without its
 # own --budget (BUD-2 resolution: task > project > global > unlimited).
+#
+# --harness records the project's coding-harness preference (asked once, at
+# onboarding) in data/projects/<name>/harness — applied to any task
+# dispatched without an explicit harness, ahead of config/crew-harness
+# (resolution: per-task request > project > crew-harness > detected).
 #
 # Writes one registry line (the format em-project-mode.sh parses):
 #   - <name> [<mode>[ +auto]] - <desc> (added <date>) [| test: <cmd>] [| lint: <cmd>]
@@ -49,7 +54,7 @@ has_entry() { # <name> — is the project already registered?
 }
 
 cmd_add() {
-  local name="$1" mode="$2" auto="$3" desc="$4" test_cmd="$5" lint_cmd="$6" budget_spec="$7"
+  local name="$1" mode="$2" auto="$3" desc="$4" test_cmd="$5" lint_cmd="$6" budget_spec="$7" harness="$8"
   case "$name" in
     '' | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*)
       die "invalid project name '$name' — letters, digits, dots, dashes, underscores; must start alphanumeric"
@@ -63,6 +68,8 @@ cmd_add() {
   check_value --desc "$desc"
   [ -z "$budget_spec" ] || parse_budget_spec "$budget_spec" >/dev/null ||
     die "invalid --budget '$budget_spec' (want e.g. wall=45m,tokens=1.5M,cost=2.00)"
+  [ -z "$harness" ] || known_harness "$harness" ||
+    die "unknown --harness '$harness' (claude|codex|opencode|pi|cursor)"
   [ -z "$test_cmd" ] || check_value --test "$test_cmd"
   [ -z "$lint_cmd" ] || check_value --lint "$lint_cmd"
   [ -d "$EM_PROJECTS/$name/.git" ] ||
@@ -84,6 +91,7 @@ cmd_add() {
   [ -f "$store/memory.md" ] || printf '# %s — EM memory\n\nDurable, fleet-side knowledge the EM has accumulated about this project:\ntask-history lessons, recurring failure modes, Director rulings. EM-written;\nnever shown to ICs verbatim. Director docs (architecture, documentation,\nstanding instructions) belong in kb/ instead — briefs list those for ICs.\n' \
     "$name" > "$store/memory.md"
   [ -z "$budget_spec" ] || printf '%s\n' "$budget_spec" > "$store/budget"
+  [ -z "$harness" ] || printf '%s\n' "$harness" > "$store/harness"
   if [ "$mode" = "gated" ] && [ -z "$test_cmd" ] && [ -z "$lint_cmd" ]; then
     warn "gated project with no gate commands — it cannot take build tasks until test:/lint: are recorded"
   fi
@@ -125,13 +133,13 @@ cmd_validate() {
 }
 
 main() {
-  local name="" mode="gated" auto=0 desc="" test_cmd="" lint_cmd="" validate=0 budget_spec=""
+  local name="" mode="gated" auto=0 desc="" test_cmd="" lint_cmd="" validate=0 budget_spec="" harness=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h | --help) usage; exit 0 ;;
       --validate) validate=1 ;;
       --auto) auto=1 ;;
-      --mode | --desc | --test | --lint | --budget)
+      --mode | --desc | --test | --lint | --budget | --harness)
         [ $# -ge 2 ] || die "$1 needs a value"
         case "$1" in
           --mode) mode="$2" ;;
@@ -139,6 +147,7 @@ main() {
           --test) test_cmd="$2" ;;
           --lint) lint_cmd="$2" ;;
           --budget) budget_spec="$2" ;;
+          --harness) harness="$2" ;;
         esac
         shift
         ;;
@@ -157,7 +166,7 @@ main() {
     return 0
   fi
   [ -n "$name" ] || { usage >&2; exit 1; }
-  cmd_add "$name" "$mode" "$auto" "$desc" "$test_cmd" "$lint_cmd" "$budget_spec"
+  cmd_add "$name" "$mode" "$auto" "$desc" "$test_cmd" "$lint_cmd" "$budget_spec" "$harness"
 }
 
 main "$@"

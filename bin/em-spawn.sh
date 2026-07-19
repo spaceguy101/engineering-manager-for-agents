@@ -23,8 +23,8 @@
 # budget_warning(unmetered) event. --on-exceed picks the hard-threshold
 # action (default pause).
 #
-# Harness resolves via em-harness.sh (request > config/crew-harness >
-# detected). claude ships verified; any other harness must be listed in
+# Harness resolves via em-harness.sh (request > per-project choice >
+# config/crew-harness > detected). claude ships verified; any other harness must be listed in
 # config/verified-harnesses (one name per line, added after a supervised
 # trial task — see AGENTS.md). Never dispatch on an unverified adapter.
 # The turn-end hook is claude-only; other harnesses rely on stale/heartbeat
@@ -110,7 +110,10 @@ verify_launch() {
   fi
   sleep "$secs"
   pane="$(tmux_cmd capture-pane -p -t "$target" 2>/dev/null || true)"
-  if printf '%s\n' "$pane" | grep -qiE 'trust the files|workspace trust'; then
+  # Trust-dialog wording differs per harness: claude "trust the files in this
+  # folder", cursor "Workspace Trust Required", codex "Do you trust the
+  # contents of this directory?". Match all three (codex was previously missed).
+  if printf '%s\n' "$pane" | grep -qiE 'do you trust|trust the files|trust the contents|workspace trust'; then
     log "spawn-check: trust dialog showing — accept it: em-send.sh $id --key Enter"
   elif printf '%s\n' "$pane" | grep -qiE 'bypass ?permissions'; then
     log "spawn-check: bypass-permissions dialog showing (defaults to \"No, exit\") — accept it: em-send.sh $id --key Down, then em-send.sh $id --key Enter"
@@ -158,7 +161,7 @@ main() {
   require_id "$id"
   repo="${repo#projects/}"
 
-  harness="$("$EM_BIN/em-harness.sh" resolve "$harness")"
+  harness="$("$EM_BIN/em-harness.sh" resolve "$harness" --project "$repo")"
   harness_cmd "$harness" >/dev/null ||
     die "unknown harness '$harness' (claude|codex|opencode|pi|cursor)"
   if [ -z "${EM_LAUNCH_OVERRIDE:-}" ] && ! harness_verified "$harness"; then

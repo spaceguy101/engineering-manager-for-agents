@@ -4,8 +4,11 @@
 #
 # Usage:
 #   em-harness.sh detect                 print claude|codex|opencode|pi|cursor|unknown
-#   em-harness.sh resolve [<requested>]  effective IC harness, in priority:
-#                                        per-task request > config/crew-harness
+#   em-harness.sh resolve [<requested>] [--project <name>]
+#                                        effective IC harness, in priority:
+#                                        per-task request > per-project choice
+#                                        (data/projects/<name>/harness, set at
+#                                        onboarding) > config/crew-harness
 #                                        > detected (unknown → claude)
 #
 # Detection: environment markers first, then process ancestry.
@@ -54,10 +57,32 @@ detect() {
 }
 
 resolve() {
-  local requested="${1:-}"
+  local requested="" project=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project)
+        [ $# -ge 2 ] || die "--project needs a value"
+        project="$2"
+        shift
+        ;;
+      -*) die "unknown option '$1'" ;;
+      *)
+        [ -z "$requested" ] || { usage >&2; exit 1; }
+        requested="$1"
+        ;;
+    esac
+    shift
+  done
   if [ -n "$requested" ]; then
     printf '%s\n' "$requested"
     return
+  fi
+  if [ -n "$project" ]; then
+    local pref
+    if pref="$(project_harness "$project")"; then
+      printf '%s\n' "$pref"
+      return
+    fi
   fi
   if [ -f "$EM_CONFIG/crew-harness" ]; then
     local override

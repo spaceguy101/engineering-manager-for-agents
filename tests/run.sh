@@ -420,6 +420,16 @@ grep -v 'nosuchmode' "$EM_ROOT/data/projects.md" > "$EM_ROOT/data/projects.md.tm
   mv "$EM_ROOT/data/projects.md.tmp" "$EM_ROOT/data/projects.md"
 expect "--validate green again after the fix" "$BIN/em-project-add.sh" --validate
 
+make_project phar
+expect "records a harness preference at onboarding" \
+  "$BIN/em-project-add.sh" phar --desc 'harness project' --mode direct-PR --harness codex
+expect "harness file round-trips" \
+  test "$(cat "$EM_ROOT/data/projects/phar/harness")" = "codex"
+expect "resolve honors the recorded harness" \
+  test "$(env CLAUDECODE=1 "$BIN/em-harness.sh" resolve --project phar)" = "codex"
+make_project phar2
+expect_rc "refuses an unknown harness" 1 "$BIN/em-project-add.sh" phar2 --desc x --harness bogus
+
 note "per-project memory + knowledge base (data/projects/<name>/)"
 expect "add scaffolds the kb directory" test -d "$EM_ROOT/data/projects/padd/kb"
 expect "add scaffolds memory.md" grep -q 'EM memory' "$EM_ROOT/data/projects/padd/memory.md"
@@ -466,6 +476,22 @@ echo opencode > "$EM_ROOT/config/crew-harness"
 expect "crew-harness override applies" test "$("$BIN/em-harness.sh" resolve)" = "opencode"
 rm "$EM_ROOT/config/crew-harness"
 expect "falls back to the detected harness" test "$(env CLAUDECODE=1 "$BIN/em-harness.sh" resolve)" = "claude"
+
+note "em-harness.sh — per-project preference (onboarding choice)"
+mkdir -p "$EM_ROOT/data/projects/hpref"
+echo codex > "$EM_ROOT/data/projects/hpref/harness"
+expect "per-project harness applies" \
+  test "$(env CLAUDECODE=1 "$BIN/em-harness.sh" resolve --project hpref)" = "codex"
+echo opencode > "$EM_ROOT/config/crew-harness"
+expect "per-project harness beats crew-harness" \
+  test "$("$BIN/em-harness.sh" resolve --project hpref)" = "codex"
+expect "per-task request beats per-project" \
+  test "$("$BIN/em-harness.sh" resolve pi --project hpref)" = "pi"
+rm "$EM_ROOT/config/crew-harness"
+rm "$EM_ROOT/data/projects/hpref/harness"
+expect "no project pref falls back to detected" \
+  test "$(env CLAUDECODE=1 "$BIN/em-harness.sh" resolve --project hpref)" = "claude"
+rm -rf "$EM_ROOT/data/projects/hpref"
 
 note "em-promote.sh — research → protected build task"
 fake_meta tst-x2 demo

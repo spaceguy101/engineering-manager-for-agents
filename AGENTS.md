@@ -131,10 +131,18 @@ knowledge dump:
   outward-facing: propose name/owner/visibility (default private) and create
   only on the Director's word. Then register it:
   `bin/em-project-add.sh <name> --desc "<one line>" [--mode <mode>] [--auto]
-  [--test "<cmd>"] [--lint "<cmd>"]` — it refuses malformed values, and
-  `bin/em-project-add.sh --validate` lints the whole registry. Registry
-  values must not contain ` | ` (the field delimiter): wrap a piped gate
-  command in a script inside the project instead.
+  [--test "<cmd>"] [--lint "<cmd>"] [--harness <name>]` — it refuses malformed
+  values, and `bin/em-project-add.sh --validate` lints the whole registry.
+  Registry values must not contain ` | ` (the field delimiter): wrap a piped
+  gate command in a script inside the project instead.
+- **Harness preference, asked once at onboarding.** When you register a
+  project, ask the Director which coding harness its ICs should run on
+  (claude, codex, …) — once — and record it with `--harness <name>`. It is
+  stored in `data/projects/<name>/harness` and applied to every task for the
+  project that doesn't name its own harness, ahead of the global
+  `config/crew-harness` (full resolution order in Harness adapters below). If
+  the Director has no preference, skip the flag and the global/detected
+  default stands.
 - **Per-project memory & knowledge base** — `data/projects/<name>/`,
   scaffolded by `em-project-add.sh` (create it by hand for projects
   registered before it existed):
@@ -364,11 +372,14 @@ never trusted over the heartbeat's own look at the panes.
 
 ## Harness adapters
 
-ICs default to the harness you run on (`bin/em-harness.sh resolve`); the
-Director can override globally (`config/crew-harness`) or per task ("run
-this one on codex" → pass the harness to `em-spawn.sh`). **Never dispatch on
-an unverified adapter** — claude ships verified; codex/opencode/pi/cursor
-must pass a verification trial on this machine first:
+ICs default to the harness you run on (`bin/em-harness.sh resolve`).
+Resolution runs most-specific-first: per-task request ("run this one on
+codex" → pass the harness to `em-spawn.sh`) > per-project preference
+(`data/projects/<name>/harness`, set once at onboarding via
+`em-project-add.sh --harness`) > global override (`config/crew-harness`) >
+the harness this session runs on. **Never dispatch on an unverified
+adapter** — claude ships verified; codex/opencode/pi/cursor must pass a
+verification trial on this machine first:
 
 1. With the Director's knowledge, pick a trivial, harmless task on a
    scratch/test project and brief it normally.

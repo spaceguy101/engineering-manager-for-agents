@@ -14,6 +14,9 @@
 #   require_id     validate a task id (kebab slug, e.g. fix-login-k3)
 #   window_name    canonical tmux window name for a task: em-<id>
 #   harness_binary executable a harness launches as (cursor → agent)
+#   known_harness  true if <name> is a launchable harness (not verification)
+#   project_harness  the project's onboarding harness choice from
+#                    data/projects/<name>/harness; fails when unset
 #   tmux_cmd       tmux, honoring EM_TMUX_SOCKET (test isolation seam)
 #   inside_tmux    running inside a usable tmux session
 #   create_task_window   new detached window for a task, in the current
@@ -93,6 +96,26 @@ harness_binary() {
       ;;
     *) printf '%s\n' "$1" ;;
   esac
+}
+
+# known_harness <name> — true if <name> is a harness the system knows how to
+# launch (claude|codex|opencode|pi|cursor). Says nothing about verification.
+known_harness() {
+  case "$1" in
+    claude | codex | opencode | pi | cursor) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# project_harness <project> — the project's recorded harness preference,
+# chosen at onboarding and stored one word to data/projects/<name>/harness.
+# Prints the word; fails (nonzero) when the file is missing or blank.
+project_harness() {
+  local f="$EM_DATA/projects/$1/harness" v
+  [ -s "$f" ] || return 1
+  v="$(head -n1 "$f" | tr -d '[:space:]')"
+  [ -n "$v" ] || return 1
+  printf '%s\n' "$v"
 }
 
 # tmux, on the isolated test socket when EM_TMUX_SOCKET is set (test-only seam).
